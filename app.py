@@ -2,6 +2,7 @@ import os
 import requests
 from flask import Flask, request
 from openai import OpenAI
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
@@ -138,7 +139,39 @@ def save_message(customer_id, sender, message, whatsapp_message_id=None):
     )
 
     response.raise_for_status()
+def update_customer(customer_id, profile):
+    url = f"{SUPABASE_URL}/rest/v1/customers"
 
+    payload = {}
+
+    for field in [
+        "name",
+        "intent",
+        "location",
+        "budget",
+        "property_type",
+        "interested_property",
+        "lead_status"
+    ]:
+        value = profile.get(field)
+
+        if value is not None and value != "":
+            payload[field] = value
+
+    payload["last_message_at"] = datetime.now(timezone.utc).isoformat()
+
+    headers = supabase_headers()
+    headers["Prefer"] = "return=minimal"
+
+    response = requests.patch(
+        url,
+        headers=headers,
+        params={"id": f"eq.{customer_id}"},
+        json=payload,
+        timeout=15
+    )
+
+    response.raise_for_status()
 
 def get_conversation_history(customer_id):
     url = f"{SUPABASE_URL}/rest/v1/messages"
