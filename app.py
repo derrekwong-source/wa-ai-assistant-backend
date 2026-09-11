@@ -5,7 +5,9 @@ from flask import Flask, request
 from openai import OpenAI
 from datetime import datetime, timezone
 
+
 app = Flask(__name__)
+
 
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 WHATSAPP_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN")
@@ -14,6 +16,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -140,6 +143,8 @@ def save_message(customer_id, sender, message, whatsapp_message_id=None):
     )
 
     response.raise_for_status()
+
+
 def update_customer(customer_id, profile):
     url = f"{SUPABASE_URL}/rest/v1/customers"
 
@@ -173,6 +178,7 @@ def update_customer(customer_id, profile):
     )
 
     response.raise_for_status()
+
 
 def get_conversation_history(customer_id):
     url = f"{SUPABASE_URL}/rest/v1/messages"
@@ -233,6 +239,7 @@ def webhook():
     print("Incoming WhatsApp message:", data)
 
     try:
+
         value = data["entry"][0]["changes"][0]["value"]
 
         messages = value.get("messages", [])
@@ -274,97 +281,99 @@ def webhook():
         conversation_history = get_conversation_history(customer_id)
 
         # Ask OpenAI
-response = openai_client.responses.create(
-    model="gpt-5.6-luna",
-    instructions=SYSTEM_INSTRUCTIONS + """
+        response = openai_client.responses.create(
+            model="gpt-5.6-luna",
+            instructions=SYSTEM_INSTRUCTIONS + """
 
 You must do two things:
+
 1. Write a natural WhatsApp reply to the customer.
 2. Extract any customer profile information that has already been provided in the conversation.
 
 Do not guess missing information.
+
 If a field is not known, return null.
 
 For budget, keep the customer's wording as text.
+
 Examples:
 - "RM3 million"
 - "RM2m - RM3m"
 - "below RM3m"
 
 For intent, use "Own Stay" or "Investment" when clearly known.
+
 For lead_status, use "New Lead" unless the conversation clearly indicates a more advanced lead.
 """,
-    input=conversation_history,
-    text={
-        "format": {
-            "type": "json_schema",
-            "name": "customer_response",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "reply": {
-                        "type": "string"
-                    },
-                    "profile": {
+            input=conversation_history,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "customer_response",
+                    "schema": {
                         "type": "object",
                         "properties": {
-                            "name": {
-                                "type": ["string", "null"]
+                            "reply": {
+                                "type": "string"
                             },
-                            "intent": {
-                                "type": ["string", "null"]
-                            },
-                            "location": {
-                                "type": ["string", "null"]
-                            },
-                            "budget": {
-                                "type": ["string", "null"]
-                            },
-                            "property_type": {
-                                "type": ["string", "null"]
-                            },
-                            "interested_property": {
-                                "type": ["string", "null"]
-                            },
-                            "lead_status": {
-                                "type": ["string", "null"]
+                            "profile": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {
+                                        "type": ["string", "null"]
+                                    },
+                                    "intent": {
+                                        "type": ["string", "null"]
+                                    },
+                                    "location": {
+                                        "type": ["string", "null"]
+                                    },
+                                    "budget": {
+                                        "type": ["string", "null"]
+                                    },
+                                    "property_type": {
+                                        "type": ["string", "null"]
+                                    },
+                                    "interested_property": {
+                                        "type": ["string", "null"]
+                                    },
+                                    "lead_status": {
+                                        "type": ["string", "null"]
+                                    }
+                                },
+                                "required": [
+                                    "name",
+                                    "intent",
+                                    "location",
+                                    "budget",
+                                    "property_type",
+                                    "interested_property",
+                                    "lead_status"
+                                ],
+                                "additionalProperties": False
                             }
                         },
                         "required": [
-                            "name",
-                            "intent",
-                            "location",
-                            "budget",
-                            "property_type",
-                            "interested_property",
-                            "lead_status"
+                            "reply",
+                            "profile"
                         ],
                         "additionalProperties": False
-                    }
-                },
-                "required": [
-                    "reply",
-                    "profile"
-                ],
-                "additionalProperties": False
-            },
-            "strict": True
-        }
-    }
-)
+                    },
+                    "strict": True
+                }
+            }
+        )
 
-result = json.loads(response.output_text)
+        result = json.loads(response.output_text)
 
-ai_reply = result["reply"]
-customer_profile = result["profile"]
-
-print("AI Reply:", ai_reply)
-print("Customer Profile:", customer_profile)
-
-# Update customer profile
-update_customer(customer_id, customer_profile)
+        ai_reply = result["reply"]
+        customer_profile = result["profile"]
 
         print("AI Reply:", ai_reply)
+        print("Customer Profile:", customer_profile)
+
+        # Update customer profile
+        update_customer(customer_id, customer_profile)
 
         # Save AI reply
         save_message(
