@@ -274,13 +274,95 @@ def webhook():
         conversation_history = get_conversation_history(customer_id)
 
         # Ask OpenAI
-        response = openai_client.responses.create(
-            model="gpt-5.6-luna",
-            instructions=SYSTEM_INSTRUCTIONS,
-            input=conversation_history
-        )
+response = openai_client.responses.create(
+    model="gpt-5.6-luna",
+    instructions=SYSTEM_INSTRUCTIONS + """
 
-        ai_reply = response.output_text
+You must do two things:
+1. Write a natural WhatsApp reply to the customer.
+2. Extract any customer profile information that has already been provided in the conversation.
+
+Do not guess missing information.
+If a field is not known, return null.
+
+For budget, keep the customer's wording as text.
+Examples:
+- "RM3 million"
+- "RM2m - RM3m"
+- "below RM3m"
+
+For intent, use "Own Stay" or "Investment" when clearly known.
+For lead_status, use "New Lead" unless the conversation clearly indicates a more advanced lead.
+""",
+    input=conversation_history,
+    text={
+        "format": {
+            "type": "json_schema",
+            "name": "customer_response",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "reply": {
+                        "type": "string"
+                    },
+                    "profile": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": ["string", "null"]
+                            },
+                            "intent": {
+                                "type": ["string", "null"]
+                            },
+                            "location": {
+                                "type": ["string", "null"]
+                            },
+                            "budget": {
+                                "type": ["string", "null"]
+                            },
+                            "property_type": {
+                                "type": ["string", "null"]
+                            },
+                            "interested_property": {
+                                "type": ["string", "null"]
+                            },
+                            "lead_status": {
+                                "type": ["string", "null"]
+                            }
+                        },
+                        "required": [
+                            "name",
+                            "intent",
+                            "location",
+                            "budget",
+                            "property_type",
+                            "interested_property",
+                            "lead_status"
+                        ],
+                        "additionalProperties": False
+                    }
+                },
+                "required": [
+                    "reply",
+                    "profile"
+                ],
+                "additionalProperties": False
+            },
+            "strict": True
+        }
+    }
+)
+
+result = json.loads(response.output_text)
+
+ai_reply = result["reply"]
+customer_profile = result["profile"]
+
+print("AI Reply:", ai_reply)
+print("Customer Profile:", customer_profile)
+
+# Update customer profile
+update_customer(customer_id, customer_profile)
 
         print("AI Reply:", ai_reply)
 
