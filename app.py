@@ -10,11 +10,10 @@ WHATSAPP_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# Temporary conversation memory
-# Key = customer WhatsApp number
-conversations = {}
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 SYSTEM_INSTRUCTIONS = """
@@ -42,13 +41,6 @@ Try to understand these customer details naturally:
 - Property type
 - Which property/project they are interested in
 
-For example:
-If the customer already told you they are interested in Nadayu 28,
-do not ask which property they are interested in again.
-
-If the customer already gave their budget,
-do not ask their budget again.
-
 Do not make up property information.
 Do not promise discounts.
 Do not negotiate prices.
@@ -62,6 +54,129 @@ consultant will assist them.
 You are a first-line assistant, not the salesperson.
 Do not try to close the deal yourself.
 """
+
+
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+
+def get_customer(phone):
+    url = f"{SUPABASE_URL}/rest/v1/customers"
+
+    params = {
+        "whatsapp_phone": f"eq.{phone}",
+        "select": "*",
+        "limit": "1"
+    }
+
+    response = requests.get(
+        url,
+        headers=supabase_headers(),
+        params=params,
+        timeout=15
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if data:
+        return data[0]
+
+    return None
+
+
+def create_customer(phone):
+    url = f"{SUPABASE_URL}/rest/v1/customers"
+
+    payload = {
+        "whatsapp_phone": phone,
+        "lead_status": "New Lead"
+    }
+
+    headers = supabase_headers()
+    headers["Prefer"] = "return=representation"
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=15
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    return data[0]
+
+
+def save_message(customer_id, sender, message, whatsapp_message_id=None):
+    url = f"{SUPABASE_URL}/rest/v1/messages"
+
+    payload = {
+        "customer_id": customer_id,
+        "sender": sender,
+        "message": message
+    }
+
+    if whatsapp_message_id:
+        payload["whatsapp_message_id"] = whatsapp_message_id
+
+    headers = supabase_headers()
+    headers["Prefer"] = "return=minimal"
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=15
+    )
+
+    response.raise_for_status()
+
+
+def get_conversation_history(customer_id):
+    url = f"{SUPABASE_URL}/rest/v1/messages"
+
+    params = {
+        "customer_id": f"eq.{customer_id}",
+        "select": "sender,message",
+        "order": "created_at.asc",
+        "limit": "20"
+    }
+
+    response = requests.get(
+        url,
+        headers=supabase_headers(),
+        params=params,
+        timeout=15
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    history = []
+
+    for item in data:
+        if item["sender"] == "customer":
+            history.append({
+                "role": "user",
+                "content": item["message"]
+            })
+
+        elif item["sender"] == "ai":
+            history.append({
+                "role": "assistant",
+                "content": item["message"]
+            })
+
+    return history
 
 
 @app.route("/webhook", methods=["GET"])
@@ -93,47 +208,56 @@ def webhook():
 
         message = messages[0]
 
-        # Only process text messages
         if message.get("type") != "text":
             return "EVENT_RECEIVED", 200
 
         customer_phone = message["from"]
         customer_message = message["text"]["body"]
+        whatsapp_message_id = message.get("id")
 
         print("Customer:", customer_phone)
         print("Message:", customer_message)
 
-        # Create conversation memory for new customer
-        if customer_phone not in conversations:
-            conversations[customer_phone] = []
+        # Find or create customer
+        customer = get_customer(customer_phone)
 
-        # Add customer's message
-        conversations[customer_phone].append({
-            "role": "user",
-            "content": customer_message
-        })
+        if not customer:
+            customer = create_customer(customer_phone)
 
-        # Keep the latest 20 messages
-        conversations[customer_phone] = conversations[customer_phone][-20:]
+        customer_id = customer["id"]
 
-        # Ask OpenAI with conversation history
+        print("Customer ID:", customer_id)
+
+        # Save customer message
+        save_message(
+            customer_id,
+            "customer",
+            customer_message,
+            whatsapp_message_id
+        )
+
+        # Load conversation history from database
+        conversation_history = get_conversation_history(customer_id)
+
+        # Ask OpenAI
         response = openai_client.responses.create(
             model="gpt-5.6-luna",
             instructions=SYSTEM_INSTRUCTIONS,
-            input=conversations[customer_phone]
+            input=conversation_history
         )
 
         ai_reply = response.output_text
 
         print("AI Reply:", ai_reply)
 
-        # Save AI reply into conversation memory
-        conversations[customer_phone].append({
-            "role": "assistant",
-            "content": ai_reply
-        })
+        # Save AI reply
+        save_message(
+            customer_id,
+            "ai",
+            ai_reply
+        )
 
-        # Send reply through WhatsApp Cloud API
+        # Send reply through WhatsApp
         url = (
             f"https://graph.facebook.com/v26.0/"
             f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
