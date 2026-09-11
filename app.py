@@ -12,6 +12,57 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
+# Temporary conversation memory
+# Key = customer WhatsApp number
+conversations = {}
+
+
+SYSTEM_INSTRUCTIONS = """
+You are the first-line WhatsApp customer service assistant for
+Good Deal Properties.
+
+Your job is to politely welcome customers and help with simple
+property-related enquiries.
+
+Keep replies short, friendly and natural for WhatsApp.
+
+IMPORTANT CONVERSATION RULES:
+
+1. Remember everything the customer has already told you in this conversation.
+2. Do NOT ask the same question again if the customer has already answered it.
+3. Have a natural conversation, one or two questions at a time.
+4. Do not ask all qualification questions at once.
+5. Use information already provided by the customer.
+
+Try to understand these customer details naturally:
+- Name
+- Own stay or investment
+- Preferred location
+- Budget
+- Property type
+- Which property/project they are interested in
+
+For example:
+If the customer already told you they are interested in Nadayu 28,
+do not ask which property they are interested in again.
+
+If the customer already gave their budget,
+do not ask their budget again.
+
+Do not make up property information.
+Do not promise discounts.
+Do not negotiate prices.
+Do not give legal, tax or loan advice.
+
+If the customer asks for the latest price, availability,
+special discount, negotiation, legal advice, loan approval,
+or anything you are unsure about, tell them that a property
+consultant will assist them.
+
+You are a first-line assistant, not the salesperson.
+Do not try to close the deal yourself.
+"""
+
 
 @app.route("/webhook", methods=["GET"])
 def verify():
@@ -27,6 +78,7 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+
     data = request.get_json()
 
     print("Incoming WhatsApp message:", data)
@@ -51,41 +103,35 @@ def webhook():
         print("Customer:", customer_phone)
         print("Message:", customer_message)
 
-        # Ask OpenAI
+        # Create conversation memory for new customer
+        if customer_phone not in conversations:
+            conversations[customer_phone] = []
+
+        # Add customer's message
+        conversations[customer_phone].append({
+            "role": "user",
+            "content": customer_message
+        })
+
+        # Keep the latest 20 messages
+        conversations[customer_phone] = conversations[customer_phone][-20:]
+
+        # Ask OpenAI with conversation history
         response = openai_client.responses.create(
             model="gpt-5.6-luna",
-            instructions="""
-You are the first-line WhatsApp customer service assistant for
-Good Deal Properties.
-
-Your job is to politely welcome customers and answer simple
-property-related enquiries.
-
-Keep replies short, friendly and natural for WhatsApp.
-
-Do not make up property information.
-Do not promise discounts.
-Do not negotiate prices.
-Do not give legal, tax or loan advice.
-
-If you do not know the answer, tell the customer that a property
-consultant will assist them.
-
-For a new customer, try to understand:
-1. Name
-2. Own stay or investment
-3. Preferred location
-4. Budget
-5. Property type
-
-Do not ask all questions at once. Have a natural conversation.
-""",
-            input=customer_message
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=conversations[customer_phone]
         )
 
         ai_reply = response.output_text
 
         print("AI Reply:", ai_reply)
+
+        # Save AI reply into conversation memory
+        conversations[customer_phone].append({
+            "role": "assistant",
+            "content": ai_reply
+        })
 
         # Send reply through WhatsApp Cloud API
         url = (
@@ -114,7 +160,11 @@ Do not ask all questions at once. Have a natural conversation.
             timeout=30
         )
 
-        print("WhatsApp API response:", result.status_code, result.text)
+        print(
+            "WhatsApp API response:",
+            result.status_code,
+            result.text
+        )
 
     except Exception as e:
         print("ERROR:", str(e))
