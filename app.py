@@ -1,10 +1,11 @@
 import os
 import re
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from openai import OpenAI
 from pydantic import BaseModel
 from typing import Optional
+from html import escape
 
 app = Flask(__name__)
 
@@ -20,6 +21,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD")
 
 MODEL = "gpt-5.6-luna"
 
@@ -70,6 +73,37 @@ def verify_webhook():
         return challenge, 200
 
     return "Verification failed", 403
+
+
+# =========================================================
+# DASHBOARD AUTHENTICATION
+# =========================================================
+
+def dashboard_authenticated():
+
+    auth = request.authorization
+
+    if not auth:
+        return False
+
+    if auth.username != "admin":
+        return False
+
+    if not DASHBOARD_PASSWORD:
+        return False
+
+    return auth.password == DASHBOARD_PASSWORD
+
+
+def dashboard_auth_required():
+
+    return Response(
+        "Dashboard login required.",
+        401,
+        {
+            "WWW-Authenticate": 'Basic realm="WA AI Assistant Dashboard"'
+        },
+    )
 
 
 # =========================================================
@@ -163,6 +197,455 @@ def update_customer(customer_id, updates):
 
 
 # =========================================================
+# GET HOT LEADS FOR DASHBOARD
+# =========================================================
+
+def get_hot_leads():
+
+    url = f"{SUPABASE_URL}/rest/v1/customers"
+
+    params = {
+        "select": "*",
+        "or": "(lead_status.eq.Hot Lead,handoff_required.eq.true)",
+        "order": "last_message_at.desc.nullslast,created_at.desc",
+        "limit": "100",
+    }
+
+    response = requests.get(
+        url,
+        headers=SUPABASE_HEADERS,
+        params=params,
+        timeout=20,
+    )
+
+    if response.status_code != 200:
+        print(
+            "Supabase hot leads error:",
+            response.status_code,
+            response.text,
+        )
+        return []
+
+    return response.json()
+
+
+# =========================================================
+# DASHBOARD
+# =========================================================
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+
+    if not dashboard_authenticated():
+        return dashboard_auth_required()
+
+    leads = get_hot_leads()
+
+    rows = ""
+
+    for lead in leads:
+
+        name = escape(
+            str(lead.get("name") or "Unknown")
+        )
+
+        phone = escape(
+            str(
+                lead.get("whatsapp_phone")
+                or "-"
+            )
+        )
+
+        intent = escape(
+            str(
+                lead.get("intent")
+                or "-"
+            )
+        )
+
+        budget = escape(
+            str(
+                lead.get("budget")
+                or "-"
+            )
+        )
+
+        location = escape(
+            str(
+                lead.get("location")
+                or "-"
+            )
+        )
+
+        property_type = escape(
+            str(
+                lead.get("property_type")
+                or "-"
+            )
+        )
+
+        interested_property = escape(
+            str(
+                lead.get("interested_property")
+                or "-"
+            )
+        )
+
+        lead_status = escape(
+            str(
+                lead.get("lead_status")
+                or "-"
+            )
+        )
+
+        handoff = (
+            "YES"
+            if lead.get("handoff_required")
+            else "NO"
+        )
+
+        last_message_at = escape(
+            str(
+                lead.get("last_message_at")
+                or lead.get("created_at")
+                or "-"
+            )
+        )
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{name}</strong><br>
+                <span class="phone">{phone}</span>
+            </td>
+
+            <td>{escape(intent)}</td>
+
+            <td>
+                <strong>{escape(budget)}</strong>
+            </td>
+
+            <td>{escape(location)}</td>
+
+            <td>{escape(property_type)}</td>
+
+            <td class="property">
+                {interested_property}
+            </td>
+
+            <td>
+                <span class="hot">{lead_status}</span>
+            </td>
+
+            <td>
+                <span class="handoff">{handoff}</span>
+            </td>
+
+            <td class="date">
+                {last_message_at}
+            </td>
+        </tr>
+        """
+
+    if not rows:
+
+        rows = """
+        <tr>
+            <td colspan="9" class="empty">
+                No Hot Leads yet.
+            </td>
+        </tr>
+        """
+
+    html = f"""
+<!DOCTYPE html>
+
+<html>
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
+
+<meta
+    http-equiv="refresh"
+    content="30"
+>
+
+<title>WA AI Assistant - Dashboard</title>
+
+<style>
+
+* {{
+    box-sizing: border-box;
+}}
+
+body {{
+    margin: 0;
+    padding: 0;
+    background: #f4f6f8;
+    color: #172033;
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+}}
+
+.header {{
+    background: #101d3a;
+    color: white;
+    padding: 22px 28px;
+}}
+
+.header-inner {{
+    max-width: 1600px;
+    margin: auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}}
+
+.logo {{
+    font-size: 22px;
+    font-weight: 700;
+}}
+
+.subtitle {{
+    margin-top: 5px;
+    color: #c8d1df;
+    font-size: 13px;
+}}
+
+.refresh {{
+    font-size: 12px;
+    color: #d8dee8;
+}}
+
+.container {{
+    max-width: 1600px;
+    margin: 28px auto;
+    padding: 0 20px;
+}}
+
+.stats {{
+    display: flex;
+    gap: 18px;
+    margin-bottom: 22px;
+}}
+
+.stat-card {{
+    background: white;
+    border-radius: 12px;
+    padding: 18px 22px;
+    box-shadow:
+        0 2px 10px rgba(0,0,0,0.06);
+    min-width: 180px;
+}}
+
+.stat-title {{
+    font-size: 12px;
+    color: #718096;
+    margin-bottom: 8px;
+}}
+
+.stat-number {{
+    font-size: 30px;
+    font-weight: 700;
+    color: #c28b20;
+}}
+
+.table-wrapper {{
+    background: white;
+    border-radius: 12px;
+    overflow-x: auto;
+    box-shadow:
+        0 2px 10px rgba(0,0,0,0.06);
+}}
+
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 1300px;
+}}
+
+th {{
+    background: #101d3a;
+    color: white;
+    text-align: left;
+    padding: 14px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+}}
+
+td {{
+    padding: 15px 12px;
+    border-bottom: 1px solid #edf0f3;
+    vertical-align: top;
+    font-size: 13px;
+}}
+
+tr:hover {{
+    background: #fafbfc;
+}}
+
+.phone {{
+    color: #64748b;
+    font-size: 12px;
+}}
+
+.property {{
+    max-width: 360px;
+    line-height: 1.5;
+}}
+
+.hot {{
+    display: inline-block;
+    background: #fff1f1;
+    color: #d12f2f;
+    padding: 5px 9px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 11px;
+}}
+
+.handoff {{
+    display: inline-block;
+    background: #fff6df;
+    color: #a56b00;
+    padding: 5px 9px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 11px;
+}}
+
+.date {{
+    color: #64748b;
+    white-space: nowrap;
+    font-size: 11px;
+}}
+
+.empty {{
+    text-align: center;
+    padding: 60px;
+    color: #718096;
+}}
+
+@media (max-width: 700px) {{
+
+    .header-inner {{
+        display: block;
+    }}
+
+    .refresh {{
+        margin-top: 8px;
+    }}
+
+    .stats {{
+        display: block;
+    }}
+
+    .stat-card {{
+        margin-bottom: 12px;
+    }}
+
+}}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="header">
+
+    <div class="header-inner">
+
+        <div>
+            <div class="logo">
+                WA AI Assistant
+            </div>
+
+            <div class="subtitle">
+                Human Handoff Dashboard
+            </div>
+        </div>
+
+        <div class="refresh">
+            Auto refresh: 30 seconds
+        </div>
+
+    </div>
+
+</div>
+
+
+<div class="container">
+
+    <div class="stats">
+
+        <div class="stat-card">
+
+            <div class="stat-title">
+                HOT LEADS
+            </div>
+
+            <div class="stat-number">
+                {len(leads)}
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="table-wrapper">
+
+        <table>
+
+            <thead>
+
+                <tr>
+
+                    <th>Customer</th>
+                    <th>Intent</th>
+                    <th>Budget</th>
+                    <th>Location</th>
+                    <th>Property Type</th>
+                    <th>Interested Property</th>
+                    <th>Status</th>
+                    <th>Handoff</th>
+                    <th>Last Message</th>
+
+                </tr>
+
+            </thead>
+
+            <tbody>
+
+                {rows}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+</div>
+
+</body>
+</html>
+"""
+
+    return Response(
+        html,
+        mimetype="text/html",
+    )
+
+
+# =========================================================
 # SAVE MESSAGE
 # =========================================================
 
@@ -182,7 +665,9 @@ def save_message(
     }
 
     if whatsapp_message_id:
-        payload["whatsapp_message_id"] = whatsapp_message_id
+        payload["whatsapp_message_id"] = (
+            whatsapp_message_id
+        )
 
     response = requests.post(
         url,
@@ -195,7 +680,10 @@ def save_message(
     )
 
     if response.status_code not in [200, 201]:
-        print("Supabase save message error:", response.text)
+        print(
+            "Supabase save message error:",
+            response.text,
+        )
 
 
 # =========================================================
@@ -330,7 +818,9 @@ def search_listings(
 
     listings = response.json()
 
-    customer_budget = parse_budget(budget)
+    customer_budget = parse_budget(
+        budget
+    )
 
     results = []
 
@@ -350,7 +840,10 @@ def search_listings(
 
         if location:
 
-            if str(location).lower() not in listing_location:
+            if (
+                str(location).lower()
+                not in listing_location
+            ):
                 continue
 
         if property_type:
@@ -360,8 +853,10 @@ def search_listings(
             )
 
             if (
-                property_type_lower not in listing_type
-                and listing_type not in property_type_lower
+                property_type_lower
+                not in listing_type
+                and listing_type
+                not in property_type_lower
             ):
                 continue
 
@@ -400,7 +895,9 @@ Suitable For: {listing.get('suitable_for')}
 Description: {listing.get('description')}
 """
 
-        output.append(text.strip())
+        output.append(
+            text.strip()
+        )
 
     return "\n\n".join(output)
 
@@ -494,8 +991,10 @@ Rules:
             "property_type": existing_profile.get(
                 "property_type"
             ),
-            "interested_property": existing_profile.get(
-                "interested_property"
+            "interested_property": (
+                existing_profile.get(
+                    "interested_property"
+                )
             ),
             "lead_status": existing_profile.get(
                 "lead_status"
@@ -603,7 +1102,9 @@ def generate_ai_reply(
     handoff_required=False,
 ):
 
-    listing_context = format_listings(listings)
+    listing_context = format_listings(
+        listings
+    )
 
     profile_context = f"""
 Customer Profile:
@@ -776,9 +1277,11 @@ def send_hot_lead_notification(
 ):
 
     if not agent_settings:
+
         print(
             "No active agent notification setting found."
         )
+
         return False
 
     agent_phone = agent_settings.get(
@@ -786,9 +1289,11 @@ def send_hot_lead_notification(
     )
 
     if not agent_phone:
+
         print(
             "Agent notification phone is empty."
         )
+
         return False
 
     customer_phone = customer.get(
@@ -905,8 +1410,8 @@ def webhook():
                     if message_type != "text":
                         continue
 
-                    whatsapp_message_id = message.get(
-                        "id"
+                    whatsapp_message_id = (
+                        message.get("id")
                     )
 
                     sender = message.get(
@@ -952,9 +1457,11 @@ def webhook():
                         )
 
                         if not customer:
+
                             print(
                                 "Unable to create customer."
                             )
+
                             continue
 
                     customer_id = customer.get(
@@ -996,7 +1503,7 @@ def webhook():
                     )
 
                     # ---------------------------------------------
-                    # CHECK OLD HANDOFF STATE
+                    # OLD HANDOFF STATE
                     # ---------------------------------------------
 
                     old_handoff_required = bool(
@@ -1006,7 +1513,7 @@ def webhook():
                     )
 
                     # ---------------------------------------------
-                    # DETECT NEW HANDOFF
+                    # NEW HANDOFF DETECTION
                     # ---------------------------------------------
 
                     handoff_triggered = (
@@ -1158,7 +1665,7 @@ def webhook():
                     )
 
                     # ---------------------------------------------
-                    # SEND AI REPLY TO CUSTOMER
+                    # SEND AI REPLY
                     # ---------------------------------------------
 
                     send_whatsapp_message(
@@ -1168,9 +1675,6 @@ def webhook():
 
                     # ---------------------------------------------
                     # HOT LEAD NOTIFICATION
-                    #
-                    # ONLY send notification when this message
-                    # newly triggers handoff.
                     # ---------------------------------------------
 
                     if (
