@@ -19,89 +19,37 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-# =========================================================
-# SYSTEM INSTRUCTIONS
-# =========================================================
-
 SYSTEM_INSTRUCTIONS = """
 You are the first-line WhatsApp customer service assistant for
 Good Deal Properties.
 
-Your job is to politely welcome customers and help with simple
-property-related enquiries.
-
 Keep replies short, friendly and natural for WhatsApp.
-
-IMPORTANT CONVERSATION RULES:
-
-1. Remember everything the customer has already told you.
-2. Do NOT ask the same question again if the customer already answered it.
-3. Ask only one or two useful questions at a time.
-4. Use the customer's latest information when something changes.
-5. If the customer changes their budget, location, property type,
-   or other requirement, always use the latest information.
-6. Do not ignore an updated budget.
-
-CUSTOMER INFORMATION TO UNDERSTAND NATURALLY:
-
-- Name
-- Own stay or investment
-- Preferred location
-- Budget
-- Property type
-- Interested property/project
-
-LISTING RULES:
-
-If the system provides matching listings from the database,
-you MUST use those listings as the source of truth.
-
-Do NOT invent:
-- asking price
-- land area
-- built-up
-- tenure
-- location
-- property status
-- property features
-
-If a matching listing is provided, you may present its information
-to the customer.
-
-If no matching listing is provided, do not invent a property.
 
 IMPORTANT:
 
-When the customer already has:
-- location
-- property type
-- budget
+1. Always prioritize the customer's LATEST message.
+2. Do not answer an older question if the latest message has a new request.
+3. Remember information already provided by the customer.
+4. Do not ask for information that is already known.
+5. Do not invent property information.
+6. Do not promise discounts.
+7. Do not negotiate prices.
+8. Do not guarantee availability.
+9. You are a first-line assistant, not the salesperson.
 
-the system should search the listing database first.
+Customer information:
+- Name
+- Own Stay or Investment
+- Location
+- Budget
+- Property Type
+- Interested Property
 
-If matching listings are found:
-- mention the suitable listing
-- provide the available listing details
-- ask whether the customer wants more details or a viewing
+If the latest customer message changes the budget, location,
+or property type, always use the NEW information.
 
-Do NOT keep asking qualification questions first when a suitable
-listing is already available.
-
-If the customer asks about:
-- latest availability
-- negotiation
-- discount
-- viewing
-- legal matters
-- loan
-- anything uncertain
-
-do not make promises or decisions.
-
-Tell the customer that a property consultant can confirm or assist.
-
-You are a first-line assistant, not the salesperson.
-Do not try to close the deal yourself.
+If a suitable listing is provided by the database, use that
+listing as the source of truth.
 """
 
 
@@ -116,10 +64,6 @@ def supabase_headers():
         "Content-Type": "application/json"
     }
 
-
-# =========================================================
-# CUSTOMER FUNCTIONS
-# =========================================================
 
 def get_customer(phone):
     url = f"{SUPABASE_URL}/rest/v1/customers"
@@ -141,10 +85,7 @@ def get_customer(phone):
 
     data = response.json()
 
-    if data:
-        return data[0]
-
-    return None
+    return data[0] if data else None
 
 
 def create_customer(phone):
@@ -167,9 +108,7 @@ def create_customer(phone):
 
     response.raise_for_status()
 
-    data = response.json()
-
-    return data[0]
+    return response.json()[0]
 
 
 def update_customer(customer_id, profile):
@@ -177,7 +116,7 @@ def update_customer(customer_id, profile):
 
     payload = {}
 
-    fields = [
+    for field in [
         "name",
         "intent",
         "location",
@@ -185,10 +124,7 @@ def update_customer(customer_id, profile):
         "property_type",
         "interested_property",
         "lead_status"
-    ]
-
-    for field in fields:
-
+    ]:
         value = profile.get(field)
 
         if value is not None and value != "":
@@ -214,17 +150,12 @@ def update_customer(customer_id, profile):
     response.raise_for_status()
 
 
-# =========================================================
-# MESSAGE FUNCTIONS
-# =========================================================
-
 def save_message(
     customer_id,
     sender,
     message,
     whatsapp_message_id=None
 ):
-
     url = f"{SUPABASE_URL}/rest/v1/messages"
 
     payload = {
@@ -250,7 +181,6 @@ def save_message(
 
 
 def get_conversation_history(customer_id):
-
     url = f"{SUPABASE_URL}/rest/v1/messages"
 
     params = {
@@ -276,14 +206,12 @@ def get_conversation_history(customer_id):
     for item in data:
 
         if item["sender"] == "customer":
-
             history.append({
                 "role": "user",
                 "content": item["message"]
             })
 
         elif item["sender"] == "ai":
-
             history.append({
                 "role": "assistant",
                 "content": item["message"]
@@ -293,7 +221,7 @@ def get_conversation_history(customer_id):
 
 
 # =========================================================
-# BUDGET PARSER
+# BUDGET
 # =========================================================
 
 def parse_budget(value):
@@ -305,7 +233,6 @@ def parse_budget(value):
     text = text.replace(",", "")
     text = text.replace(" ", "")
 
-    # RM3m / RM3million
     match = re.search(
         r"rm?(\d+(?:\.\d+)?)m(?:illion)?",
         text
@@ -314,7 +241,6 @@ def parse_budget(value):
     if match:
         return float(match.group(1)) * 1_000_000
 
-    # RM3,000,000 / RM3000000
     match = re.search(
         r"rm?(\d+(?:\.\d+)?)",
         text
@@ -330,10 +256,6 @@ def parse_budget(value):
 
     return None
 
-
-# =========================================================
-# PRICE PARSER
-# =========================================================
 
 def parse_price(value):
 
@@ -401,44 +323,30 @@ def search_listings(
 
     for listing in listings:
 
-        # -------------------------------------------------
-        # PROPERTY STATUS
-        # -------------------------------------------------
-
         status = str(
             listing.get("property_status") or ""
         ).lower()
 
-        if status:
+        unavailable = [
+            "sold",
+            "rented",
+            "taken",
+            "unavailable",
+            "closed"
+        ]
 
-            unavailable_words = [
-                "sold",
-                "rented",
-                "taken",
-                "unavailable",
-                "closed"
-            ]
-
-            if any(
-                word in status
-                for word in unavailable_words
-            ):
-                continue
-
-        # -------------------------------------------------
-        # PRICE CHECK
-        # -------------------------------------------------
+        if any(
+            word in status
+            for word in unavailable
+        ):
+            continue
 
         asking_price = parse_price(
             listing.get("asking_price")
         )
 
         if budget_value is not None:
-
             if asking_price is not None:
-
-                # Customer budget must be able to cover
-                # the asking price.
                 if asking_price > budget_value:
                     continue
 
@@ -447,36 +355,49 @@ def search_listings(
     return suitable
 
 
-# =========================================================
-# FORMAT LISTINGS FOR AI
-# =========================================================
-
 def format_listings(listings):
 
     if not listings:
         return "NO MATCHING LISTINGS FOUND."
 
-    output = []
+    result = []
 
     for listing in listings:
 
-        item = {
-            "listing_id": listing.get("listing_id"),
-            "property_type": listing.get("property_type"),
-            "location": listing.get("location"),
-            "land_area": listing.get("land_area"),
-            "built_up": listing.get("built_up"),
-            "asking_price": listing.get("asking_price"),
-            "tenure": listing.get("tenure"),
-            "property_status": listing.get("property_status"),
-            "suitable_for": listing.get("suitable_for"),
-            "description": listing.get("description")
-        }
+        result.append({
+            "listing_id":
+                listing.get("listing_id"),
 
-        output.append(item)
+            "property_type":
+                listing.get("property_type"),
+
+            "location":
+                listing.get("location"),
+
+            "land_area":
+                listing.get("land_area"),
+
+            "built_up":
+                listing.get("built_up"),
+
+            "asking_price":
+                listing.get("asking_price"),
+
+            "tenure":
+                listing.get("tenure"),
+
+            "property_status":
+                listing.get("property_status"),
+
+            "suitable_for":
+                listing.get("suitable_for"),
+
+            "description":
+                listing.get("description")
+        })
 
     return json.dumps(
-        output,
+        result,
         ensure_ascii=False,
         indent=2
     )
@@ -566,7 +487,6 @@ def webhook():
         )
 
         if not customer:
-
             customer = create_customer(
                 customer_phone
             )
@@ -590,7 +510,7 @@ def webhook():
         )
 
         # -------------------------------------------------
-        # GET CONVERSATION
+        # HISTORY
         # -------------------------------------------------
 
         conversation_history = (
@@ -600,9 +520,7 @@ def webhook():
         )
 
         # -------------------------------------------------
-        # FIRST AI PASS
-        #
-        # Extract latest customer profile
+        # EXTRACT CUSTOMER PROFILE
         # -------------------------------------------------
 
         profile_response = (
@@ -613,29 +531,29 @@ def webhook():
                 instructions=SYSTEM_INSTRUCTIONS
                 + """
 
-Extract the customer's profile based ONLY
-on information already provided in the conversation.
+Extract the customer's profile from the conversation.
+
+IMPORTANT:
+The latest customer message has priority when information
+has changed.
 
 Do not guess.
 
-If a field is unknown, return null.
+Return null when information is unknown.
 
-For budget, keep the customer's wording.
+For budget keep the customer's wording.
 
-Examples:
-- RM3 million
-- RM2m
-- RM2.5 million
-
-For intent:
+For intent use:
 - Own Stay
 - Investment
 
-If not known, return null.
+For lead_status use:
+New Lead
 
-For lead_status:
-use New Lead unless the conversation clearly
-indicates a more advanced lead.
+Do not create or invent a property description for
+interested_property.
+Only record a specific property if the customer explicitly
+identified one.
 """,
 
                 input=conversation_history,
@@ -643,7 +561,9 @@ indicates a more advanced lead.
                 text={
                     "format": {
                         "type": "json_schema",
+
                         "name": "customer_profile",
+
                         "schema": {
 
                             "type": "object",
@@ -728,17 +648,13 @@ indicates a more advanced lead.
             customer_profile
         )
 
-        # -------------------------------------------------
-        # UPDATE CUSTOMER DATABASE
-        # -------------------------------------------------
-
         update_customer(
             customer_id,
             customer_profile
         )
 
         # -------------------------------------------------
-        # LISTING SEARCH
+        # SEARCH LISTINGS
         # -------------------------------------------------
 
         location = customer_profile.get(
@@ -755,7 +671,6 @@ indicates a more advanced lead.
 
         matching_listings = []
 
-        # Search only when enough information exists.
         if (
             location
             and property_type
@@ -778,90 +693,98 @@ indicates a more advanced lead.
         )
 
         # -------------------------------------------------
-        # FINAL AI RESPONSE
+        # FINAL RESPONSE
+        # IMPORTANT:
+        # LATEST MESSAGE ONLY HAS PRIORITY
         # -------------------------------------------------
 
-        final_instructions = SYSTEM_INSTRUCTIONS + """
+        final_prompt = """
+Write the customer's WhatsApp reply.
 
-You must now write the actual WhatsApp reply.
+CRITICAL RULE:
+
+The customer's LATEST MESSAGE is the highest priority.
+
+Do NOT answer an older question simply because it appeared
+earlier in the conversation.
+
+LATEST CUSTOMER MESSAGE:
+""" + customer_message + """
 
 CUSTOMER PROFILE:
-
 """ + json.dumps(
             customer_profile,
             ensure_ascii=False,
             indent=2
         ) + """
 
-LISTINGS FOUND FROM DATABASE:
-
+MATCHING LISTINGS FROM DATABASE:
 """ + listing_context + """
 
-VERY IMPORTANT:
+RULES:
 
-If LISTINGS FOUND contains one or more listings:
+1. If the latest message is a new budget/location/property
+   requirement and a matching listing exists:
+   recommend the matching listing immediately.
 
-1. Prioritize the matching listing.
-2. Do not ask unnecessary qualification questions first.
-3. Present the listing naturally.
-4. Only use the information provided in the listing.
-5. You may mention:
-   - asking price
-   - land area
-   - built-up
-   - tenure
-   - property status
-   - suitable_for
-   - description
-6. Do not invent missing information.
-7. Ask if the customer wants more details or a viewing.
+2. If the latest message asks for price:
+   answer the price from the listing.
 
-If LISTINGS FOUND says:
+3. If the latest message asks for land size:
+   answer the land size from the listing.
 
-NO MATCHING LISTINGS FOUND.
+4. If the latest message asks about availability:
+   say the listing is currently marked as available in the
+   database, but a property consultant should confirm the
+   latest status.
 
-Then clearly tell the customer that there is currently
-no suitable listing found based on the latest requirement.
+5. If the latest message asks about negotiation:
+   do not confirm that it is negotiable.
+   Say a property consultant can advise on the seller's terms.
 
-If the customer changed their budget, always use
-the NEW budget.
+6. If the latest message asks for a viewing:
+   say a property consultant can help arrange it and ask
+   for a convenient date and time.
 
-Example:
+7. If matching listings exist and the latest message is a
+   general property enquiry:
+   present the suitable listing.
 
-Previous budget: RM3 million
-New budget: RM2.5 million
+8. If no matching listing exists:
+   clearly say no suitable listing was found based on the
+   customer's latest requirement.
 
-Do NOT recommend a RM3 million property when the
-customer's latest budget is RM2.5 million.
+9. Never recommend a listing above the customer's latest budget.
 
-If the customer changes back to RM3 million,
-the RM3 million listing can become suitable again.
+10. Never invent listing information.
 
-IMPORTANT:
-If the customer asks about availability, do not guarantee
-that the property is still available. Say that the listing
-is currently marked available in the database and that
-a property consultant can confirm the latest status.
+11. Do not repeat old questions unnecessarily.
 
-If the customer asks about negotiation, do not confirm
-that the price is negotiable. A property consultant can
-advise on the seller's terms.
-
-Keep the WhatsApp reply concise and natural.
+Keep the reply short and natural for WhatsApp.
 """
 
         final_response = (
             openai_client.responses.create(
-
                 model="gpt-5.6-luna",
 
-                instructions=final_instructions,
+                instructions=final_prompt,
 
-                input=conversation_history
+                # IMPORTANT:
+                # Do not send the entire old conversation here.
+                # Only give the latest customer message plus
+                # current profile and current listings.
+                input=[
+                    {
+                        "role": "user",
+                        "content": customer_message
+                    }
+                ]
             )
         )
 
-        ai_reply = final_response.output_text.strip()
+        ai_reply = (
+            final_response.output_text.strip()
+        )
 
         print(
             "AI Reply:",
@@ -947,10 +870,6 @@ def home():
         200
     )
 
-
-# =========================================================
-# LOCAL RUN
-# =========================================================
 
 if __name__ == "__main__":
 
