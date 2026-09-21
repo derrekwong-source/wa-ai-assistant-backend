@@ -3,8 +3,8 @@ import re
 import requests
 from flask import Flask, request, jsonify
 from openai import OpenAI
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel
+from typing import Optional
 
 app = Flask(__name__)
 
@@ -25,11 +25,6 @@ MODEL = "gpt-5.6-luna"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-
-# =========================================================
-# SUPABASE HEADERS
-# =========================================================
-
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -38,7 +33,7 @@ SUPABASE_HEADERS = {
 
 
 # =========================================================
-# CUSTOMER PROFILE STRUCTURE
+# CUSTOMER PROFILE
 # =========================================================
 
 class CustomerProfile(BaseModel):
@@ -52,7 +47,7 @@ class CustomerProfile(BaseModel):
 
 
 # =========================================================
-# BASIC ROUTES
+# BASIC ROUTE
 # =========================================================
 
 @app.route("/", methods=["GET"])
@@ -61,7 +56,7 @@ def home():
 
 
 # =========================================================
-# WHATSAPP WEBHOOK VERIFICATION
+# WEBHOOK VERIFICATION
 # =========================================================
 
 @app.route("/webhook", methods=["GET"])
@@ -78,10 +73,11 @@ def verify_webhook():
 
 
 # =========================================================
-# SUPABASE CUSTOMER FUNCTIONS
+# CUSTOMER FUNCTIONS
 # =========================================================
 
 def get_customer(phone):
+
     url = f"{SUPABASE_URL}/rest/v1/customers"
 
     params = {
@@ -103,13 +99,11 @@ def get_customer(phone):
 
     data = response.json()
 
-    if not data:
-        return None
-
-    return data[0]
+    return data[0] if data else None
 
 
 def create_customer(phone):
+
     url = f"{SUPABASE_URL}/rest/v1/customers"
 
     payload = {
@@ -134,13 +128,11 @@ def create_customer(phone):
 
     data = response.json()
 
-    if not data:
-        return None
-
-    return data[0]
+    return data[0] if data else None
 
 
 def update_customer(customer_id, updates):
+
     url = f"{SUPABASE_URL}/rest/v1/customers"
 
     params = {
@@ -165,14 +157,21 @@ def update_customer(customer_id, updates):
     if response.status_code == 204:
         return True
 
-    return response.json()
+    data = response.json()
+
+    return data[0] if data else True
 
 
 # =========================================================
 # SAVE MESSAGE
 # =========================================================
 
-def save_message(customer_id, sender, message, whatsapp_message_id=None):
+def save_message(
+    customer_id,
+    sender,
+    message,
+    whatsapp_message_id=None,
+):
 
     url = f"{SUPABASE_URL}/rest/v1/messages"
 
@@ -200,31 +199,68 @@ def save_message(customer_id, sender, message, whatsapp_message_id=None):
 
 
 # =========================================================
+# AGENT SETTINGS
+# =========================================================
+
+def get_agent_settings():
+
+    url = f"{SUPABASE_URL}/rest/v1/agent_settings"
+
+    params = {
+        "select": "*",
+        "notification_enabled": "eq.true",
+        "limit": "1",
+    }
+
+    response = requests.get(
+        url,
+        headers=SUPABASE_HEADERS,
+        params=params,
+        timeout=20,
+    )
+
+    if response.status_code != 200:
+        print(
+            "Supabase agent settings error:",
+            response.status_code,
+            response.text,
+        )
+        return None
+
+    data = response.json()
+
+    return data[0] if data else None
+
+
+# =========================================================
 # LISTING FUNCTIONS
 # =========================================================
 
 def parse_price(value):
-    """
-    Convert listing asking_price into a numeric value.
-    Examples:
-    3,000,000
-    RM3,000,000
-    RM 3 million
-    """
 
     if value is None:
         return None
 
-    text = str(value).lower().replace(",", "").replace("rm", "").strip()
+    text = (
+        str(value)
+        .lower()
+        .replace(",", "")
+        .replace("rm", "")
+        .strip()
+    )
 
     multiplier = 1
 
     if "million" in text or "mil" in text:
         multiplier = 1_000_000
+
     elif "k" in text:
         multiplier = 1_000
 
-    numbers = re.findall(r"\d+(?:\.\d+)?", text)
+    numbers = re.findall(
+        r"\d+(?:\.\d+)?",
+        text,
+    )
 
     if not numbers:
         return None
@@ -233,23 +269,30 @@ def parse_price(value):
 
 
 def parse_budget(value):
-    """
-    Convert customer budget into numeric value.
-    """
 
     if value is None:
         return None
 
-    text = str(value).lower().replace(",", "").replace("rm", "").strip()
+    text = (
+        str(value)
+        .lower()
+        .replace(",", "")
+        .replace("rm", "")
+        .strip()
+    )
 
     multiplier = 1
 
     if "million" in text or "mil" in text:
         multiplier = 1_000_000
+
     elif "k" in text:
         multiplier = 1_000
 
-    numbers = re.findall(r"\d+(?:\.\d+)?", text)
+    numbers = re.findall(
+        r"\d+(?:\.\d+)?",
+        text,
+    )
 
     if not numbers:
         return None
@@ -257,7 +300,11 @@ def parse_budget(value):
     return float(numbers[0]) * multiplier
 
 
-def search_listings(location=None, property_type=None, budget=None):
+def search_listings(
+    location=None,
+    property_type=None,
+    budget=None,
+):
 
     url = f"{SUPABASE_URL}/rest/v1/listings"
 
@@ -275,7 +322,10 @@ def search_listings(location=None, property_type=None, budget=None):
     )
 
     if response.status_code != 200:
-        print("Supabase listings error:", response.text)
+        print(
+            "Supabase listings error:",
+            response.text,
+        )
         return []
 
     listings = response.json()
@@ -298,14 +348,16 @@ def search_listings(location=None, property_type=None, budget=None):
             listing.get("asking_price")
         )
 
-        # Location filter
         if location:
+
             if str(location).lower() not in listing_location:
                 continue
 
-        # Property type filter
         if property_type:
-            property_type_lower = str(property_type).lower()
+
+            property_type_lower = (
+                str(property_type).lower()
+            )
 
             if (
                 property_type_lower not in listing_type
@@ -313,8 +365,10 @@ def search_listings(location=None, property_type=None, budget=None):
             ):
                 continue
 
-        # Budget filter
-        if customer_budget is not None and asking_price is not None:
+        if (
+            customer_budget is not None
+            and asking_price is not None
+        ):
 
             if asking_price > customer_budget:
                 continue
@@ -355,7 +409,10 @@ Description: {listing.get('description')}
 # CUSTOMER PROFILE EXTRACTION
 # =========================================================
 
-def extract_customer_profile(latest_message, existing_profile):
+def extract_customer_profile(
+    latest_message,
+    existing_profile,
+):
 
     existing_text = f"""
 Existing customer profile:
@@ -381,8 +438,8 @@ Update the profile using the latest message.
 
 Rules:
 
-1. Keep existing information if it is still valid.
-2. If the customer provides new information, update it.
+1. Keep existing information if still valid.
+2. Update information when the customer provides new information.
 3. Do not invent information.
 4. Budget should remain as the customer's stated budget.
 5. Intent can be:
@@ -394,7 +451,7 @@ Rules:
    - Other
 6. Property type should only be filled when reasonably clear.
 7. Location should only be filled when reasonably clear.
-8. Interested property should describe the property the customer appears to be discussing.
+8. Interested property should describe the property being discussed.
 9. Do not change lead_status based only on normal enquiries.
 """
 
@@ -405,7 +462,10 @@ Rules:
             input=[
                 {
                     "role": "system",
-                    "content": "Extract structured customer profile information accurately.",
+                    "content": (
+                        "Extract structured customer "
+                        "profile information accurately."
+                    ),
                 },
                 {
                     "role": "user",
@@ -421,18 +481,25 @@ Rules:
 
     except Exception as e:
 
-        print("Profile extraction error:", str(e))
+        print(
+            "Profile extraction error:",
+            str(e),
+        )
 
         return {
             "name": existing_profile.get("name"),
             "intent": existing_profile.get("intent"),
             "location": existing_profile.get("location"),
             "budget": existing_profile.get("budget"),
-            "property_type": existing_profile.get("property_type"),
+            "property_type": existing_profile.get(
+                "property_type"
+            ),
             "interested_property": existing_profile.get(
                 "interested_property"
             ),
-            "lead_status": existing_profile.get("lead_status"),
+            "lead_status": existing_profile.get(
+                "lead_status"
+            ),
         }
 
 
@@ -440,13 +507,15 @@ Rules:
 # HUMAN HANDOFF DETECTION
 # =========================================================
 
-def detect_handoff(message, profile):
+def detect_handoff(
+    message,
+    profile,
+):
 
     text = message.lower().strip()
 
     handoff_phrases = [
 
-        # Direct request for agent
         "ask the agent to contact me",
         "ask agent to contact me",
         "agent contact me",
@@ -458,7 +527,6 @@ def detect_handoff(message, profile):
         "please contact me",
         "please call me",
 
-        # Ready to proceed
         "ready to proceed",
         "ready to buy",
         "ready to purchase",
@@ -472,7 +540,6 @@ def detect_handoff(message, profile):
         "proceed with purchase",
         "proceed with this property",
 
-        # Viewing / appointment
         "arrange a viewing",
         "arrange viewing",
         "schedule a viewing",
@@ -481,7 +548,6 @@ def detect_handoff(message, profile):
         "want to view",
         "would like to view",
 
-        # Negotiation / serious buyer
         "make an offer",
         "i want to make an offer",
         "submit an offer",
@@ -496,8 +562,12 @@ def detect_handoff(message, profile):
         if phrase in text:
             return True
 
-    # If profile intent clearly indicates buying and
-    # the customer is asking to proceed, also trigger handoff.
+    buying_intents = [
+        "buy",
+        "purchase",
+        "invest",
+    ]
+
     buying_words = [
         "buy",
         "purchase",
@@ -509,21 +579,21 @@ def detect_handoff(message, profile):
 
     if (
         profile.get("intent")
-        and str(profile.get("intent")).lower() in [
-            "buy",
-            "purchase",
-            "invest",
-        ]
+        and str(profile.get("intent")).lower()
+        in buying_intents
     ):
 
-        if any(word in text for word in buying_words):
+        if any(
+            word in text
+            for word in buying_words
+        ):
             return True
 
     return False
 
 
 # =========================================================
-# FINAL AI RESPONSE
+# AI RESPONSE
 # =========================================================
 
 def generate_ai_reply(
@@ -554,15 +624,16 @@ Lead Status: {customer_profile.get('lead_status')}
         handoff_instruction = """
 IMPORTANT:
 
-This customer has requested human assistance or has shown strong intent to proceed.
+This customer has requested human assistance
+or has shown strong intent to proceed.
 
-The system has already flagged this customer for human follow-up.
+The system has flagged this customer
+for human follow-up.
 
-Reply naturally and professionally.
+Tell the customer naturally that
+a property consultant will follow up/contact them.
 
-Tell the customer that a property consultant will follow up/contact them.
-
-Do NOT claim that a specific human has already contacted them.
+Do NOT claim a specific human has already contacted them.
 
 Do NOT promise a specific response time.
 
@@ -579,16 +650,20 @@ You are NOT the property salesperson.
 Your job is to:
 
 1. Answer the customer's latest question.
-2. Use the available listing information.
+2. Use available listing information.
 3. Be concise and natural.
 4. Never invent property information.
 5. Never promise discounts.
 6. Never promise availability unless the database says Available.
-7. If the customer asks about negotiation, say the asking price is the listed price and negotiation depends on the seller.
-8. If the customer asks about viewing, say a property consultant can assist.
-9. If information is not available, say that a property consultant can confirm it.
+7. If the customer asks about negotiation,
+   say the asking price is the listed price
+   and negotiation depends on the seller.
+8. If the customer asks about viewing,
+   say a property consultant can assist.
+9. If information is unavailable,
+   say a property consultant can confirm it.
 10. Do not repeat unnecessary information.
-11. Focus primarily on the customer's latest message.
+11. Focus primarily on the latest customer message.
 
 {handoff_instruction}
 
@@ -613,8 +688,8 @@ Write the WhatsApp reply now.
                 {
                     "role": "system",
                     "content": (
-                        "You are a professional Malaysian property "
-                        "WhatsApp first-line assistant."
+                        "You are a professional Malaysian "
+                        "property WhatsApp first-line assistant."
                     ),
                 },
                 {
@@ -628,10 +703,14 @@ Write the WhatsApp reply now.
 
     except Exception as e:
 
-        print("AI response error:", str(e))
+        print(
+            "AI response error:",
+            str(e),
+        )
 
         return (
-            "Thanks for your message. A property consultant will "
+            "Thanks for your message. "
+            "A property consultant will "
             "assist you further."
         )
 
@@ -640,7 +719,10 @@ Write the WhatsApp reply now.
 # SEND WHATSAPP MESSAGE
 # =========================================================
 
-def send_whatsapp_message(to_phone, message):
+def send_whatsapp_message(
+    to_phone,
+    message,
+):
 
     url = (
         f"https://graph.facebook.com/v23.0/"
@@ -648,7 +730,9 @@ def send_whatsapp_message(to_phone, message):
     )
 
     headers = {
-        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+        "Authorization": (
+            f"Bearer {WHATSAPP_ACCESS_TOKEN}"
+        ),
         "Content-Type": "application/json",
     }
 
@@ -669,6 +753,7 @@ def send_whatsapp_message(to_phone, message):
     )
 
     if response.status_code not in [200, 201]:
+
         print(
             "WhatsApp send error:",
             response.status_code,
@@ -681,13 +766,109 @@ def send_whatsapp_message(to_phone, message):
 
 
 # =========================================================
+# HOT LEAD NOTIFICATION
+# =========================================================
+
+def send_hot_lead_notification(
+    customer,
+    profile,
+    agent_settings,
+):
+
+    if not agent_settings:
+        print(
+            "No active agent notification setting found."
+        )
+        return False
+
+    agent_phone = agent_settings.get(
+        "whatsapp_phone"
+    )
+
+    if not agent_phone:
+        print(
+            "Agent notification phone is empty."
+        )
+        return False
+
+    customer_phone = customer.get(
+        "whatsapp_phone"
+    )
+
+    name = (
+        profile.get("name")
+        or customer.get("name")
+        or "Unknown"
+    )
+
+    intent = (
+        profile.get("intent")
+        or customer.get("intent")
+        or "Not specified"
+    )
+
+    location = (
+        profile.get("location")
+        or customer.get("location")
+        or "Not specified"
+    )
+
+    budget = (
+        profile.get("budget")
+        or customer.get("budget")
+        or "Not specified"
+    )
+
+    property_type = (
+        profile.get("property_type")
+        or customer.get("property_type")
+        or "Not specified"
+    )
+
+    interested_property = (
+        profile.get("interested_property")
+        or customer.get("interested_property")
+        or "Not specified"
+    )
+
+    notification = f"""🔥 HOT LEAD
+
+Customer: {name}
+WhatsApp: {customer_phone}
+
+Intent: {intent}
+Budget: {budget}
+Location: {location}
+Property Type: {property_type}
+
+Interested Property:
+{interested_property}
+
+⚠️ Customer requires human follow-up.
+
+Please contact the customer directly."""
+
+    print(
+        "Sending Hot Lead notification to:",
+        agent_phone,
+    )
+
+    return send_whatsapp_message(
+        to_phone=agent_phone,
+        message=notification,
+    )
+
+
+# =========================================================
 # WHATSAPP WEBHOOK
 # =========================================================
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    data = request.get_json(silent=True)
+    data = request.get_json(
+        silent=True
+    )
 
     print("Incoming webhook:")
     print(data)
@@ -698,25 +879,39 @@ def webhook():
 
         for entry_item in entry:
 
-            changes = entry_item.get("changes", [])
+            changes = entry_item.get(
+                "changes",
+                [],
+            )
 
             for change in changes:
 
-                value = change.get("value", {})
+                value = change.get(
+                    "value",
+                    {},
+                )
 
-                messages = value.get("messages", [])
+                messages = value.get(
+                    "messages",
+                    [],
+                )
 
                 for message in messages:
 
-                    message_type = message.get("type")
+                    message_type = message.get(
+                        "type"
+                    )
 
-                    # Only process text messages
                     if message_type != "text":
                         continue
 
-                    whatsapp_message_id = message.get("id")
+                    whatsapp_message_id = message.get(
+                        "id"
+                    )
 
-                    sender = message.get("from")
+                    sender = message.get(
+                        "from"
+                    )
 
                     text_body = (
                         message
@@ -728,80 +923,119 @@ def webhook():
                     if not sender or not text_body:
                         continue
 
-                    print("====================================")
-                    print("Customer:", sender)
-                    print("Message:", text_body)
+                    print(
+                        "===================================="
+                    )
 
-                    # -------------------------------------------------
-                    # GET OR CREATE CUSTOMER
-                    # -------------------------------------------------
+                    print(
+                        "Customer:",
+                        sender,
+                    )
 
-                    customer = get_customer(sender)
+                    print(
+                        "Message:",
+                        text_body,
+                    )
+
+                    # ---------------------------------------------
+                    # GET / CREATE CUSTOMER
+                    # ---------------------------------------------
+
+                    customer = get_customer(
+                        sender
+                    )
 
                     if not customer:
 
-                        customer = create_customer(sender)
+                        customer = create_customer(
+                            sender
+                        )
 
                         if not customer:
-                            print("Unable to create customer.")
+                            print(
+                                "Unable to create customer."
+                            )
                             continue
 
-                    customer_id = customer.get("id")
+                    customer_id = customer.get(
+                        "id"
+                    )
 
-                    print("Customer ID:", customer_id)
+                    print(
+                        "Customer ID:",
+                        customer_id,
+                    )
 
-                    # -------------------------------------------------
-                    # SAVE INCOMING MESSAGE
-                    # -------------------------------------------------
+                    # ---------------------------------------------
+                    # SAVE CUSTOMER MESSAGE
+                    # ---------------------------------------------
 
                     save_message(
                         customer_id=customer_id,
                         sender="customer",
                         message=text_body,
-                        whatsapp_message_id=whatsapp_message_id,
+                        whatsapp_message_id=(
+                            whatsapp_message_id
+                        ),
                     )
 
-                    # -------------------------------------------------
-                    # EXTRACT CUSTOMER PROFILE
-                    # -------------------------------------------------
+                    # ---------------------------------------------
+                    # PROFILE EXTRACTION
+                    # ---------------------------------------------
 
-                    profile = extract_customer_profile(
-                        latest_message=text_body,
-                        existing_profile=customer,
+                    profile = (
+                        extract_customer_profile(
+                            latest_message=text_body,
+                            existing_profile=customer,
+                        )
                     )
 
-                    print("Customer Profile:", profile)
-
-                    # -------------------------------------------------
-                    # DETECT HUMAN HANDOFF
-                    # -------------------------------------------------
-
-                    handoff_triggered = detect_handoff(
-                        message=text_body,
-                        profile=profile,
+                    print(
+                        "Customer Profile:",
+                        profile,
                     )
 
-                    # Existing handoff flag
-                    existing_handoff = bool(
-                        customer.get("handoff_required") or False
+                    # ---------------------------------------------
+                    # CHECK OLD HANDOFF STATE
+                    # ---------------------------------------------
+
+                    old_handoff_required = bool(
+                        customer.get(
+                            "handoff_required"
+                        ) or False
+                    )
+
+                    # ---------------------------------------------
+                    # DETECT NEW HANDOFF
+                    # ---------------------------------------------
+
+                    handoff_triggered = (
+                        detect_handoff(
+                            message=text_body,
+                            profile=profile,
+                        )
                     )
 
                     handoff_required = (
-                        existing_handoff
+                        old_handoff_required
                         or handoff_triggered
                     )
 
-                    # -------------------------------------------------
+                    # ---------------------------------------------
                     # LEAD STATUS
-                    # -------------------------------------------------
+                    # ---------------------------------------------
 
-                    existing_lead_status = customer.get(
-                        "lead_status"
+                    existing_lead_status = (
+                        customer.get(
+                            "lead_status"
+                        )
                     )
 
                     lead_status = (
                         existing_lead_status
-                        or profile.get("lead_status")
+                        or profile.get(
+                            "lead_status"
+                        )
                         or "New Lead"
                     )
 
@@ -809,34 +1043,43 @@ def webhook():
 
                         lead_status = "Hot Lead"
 
-                    elif existing_lead_status == "Hot Lead":
+                    elif (
+                        existing_lead_status
+                        == "Hot Lead"
+                    ):
 
                         lead_status = "Hot Lead"
 
-                    # -------------------------------------------------
+                    # ---------------------------------------------
                     # UPDATE CUSTOMER
-                    # -------------------------------------------------
+                    # ---------------------------------------------
 
                     customer_updates = {
-                        "name": profile.get("name"),
-                        "intent": profile.get("intent"),
-                        "location": profile.get("location"),
-                        "budget": profile.get("budget"),
+                        "name": profile.get(
+                            "name"
+                        ),
+                        "intent": profile.get(
+                            "intent"
+                        ),
+                        "location": profile.get(
+                            "location"
+                        ),
+                        "budget": profile.get(
+                            "budget"
+                        ),
                         "property_type": profile.get(
                             "property_type"
                         ),
-                        "interested_property": profile.get(
-                            "interested_property"
+                        "interested_property": (
+                            profile.get(
+                                "interested_property"
+                            )
                         ),
                         "lead_status": lead_status,
-                        "handoff_required": handoff_required,
-                        "last_message_at": "now()",
+                        "handoff_required": (
+                            handoff_required
+                        ),
                     }
-
-                    # Supabase REST API does not evaluate now()
-                    # inside JSON, so remove it and let DB default
-                    # behaviour be handled separately.
-                    customer_updates.pop("last_message_at")
 
                     update_customer(
                         customer_id,
@@ -853,16 +1096,22 @@ def webhook():
                         lead_status,
                     )
 
-                    # -------------------------------------------------
-                    # SEARCH LISTINGS
-                    # -------------------------------------------------
+                    # ---------------------------------------------
+                    # LISTING SEARCH
+                    # ---------------------------------------------
 
-                    matching_listings = search_listings(
-                        location=profile.get("location"),
-                        property_type=profile.get(
-                            "property_type"
-                        ),
-                        budget=profile.get("budget"),
+                    matching_listings = (
+                        search_listings(
+                            location=profile.get(
+                                "location"
+                            ),
+                            property_type=profile.get(
+                                "property_type"
+                            ),
+                            budget=profile.get(
+                                "budget"
+                            ),
+                        )
                     )
 
                     print(
@@ -870,26 +1119,37 @@ def webhook():
                         matching_listings,
                     )
 
-                    # -------------------------------------------------
-                    # GENERATE AI RESPONSE
-                    # -------------------------------------------------
+                    # ---------------------------------------------
+                    # AI REPLY
+                    # ---------------------------------------------
 
-                    ai_reply = generate_ai_reply(
-                        latest_message=text_body,
-                        customer_profile={
-                            **customer,
-                            **profile,
-                            "lead_status": lead_status,
-                        },
-                        listings=matching_listings,
-                        handoff_required=handoff_required,
+                    combined_profile = {
+                        **customer,
+                        **profile,
+                        "lead_status": lead_status,
+                    }
+
+                    ai_reply = (
+                        generate_ai_reply(
+                            latest_message=text_body,
+                            customer_profile=(
+                                combined_profile
+                            ),
+                            listings=matching_listings,
+                            handoff_required=(
+                                handoff_required
+                            ),
+                        )
                     )
 
-                    print("AI Reply:", ai_reply)
+                    print(
+                        "AI Reply:",
+                        ai_reply,
+                    )
 
-                    # -------------------------------------------------
+                    # ---------------------------------------------
                     # SAVE AI MESSAGE
-                    # -------------------------------------------------
+                    # ---------------------------------------------
 
                     save_message(
                         customer_id=customer_id,
@@ -897,14 +1157,43 @@ def webhook():
                         message=ai_reply,
                     )
 
-                    # -------------------------------------------------
-                    # SEND WHATSAPP
-                    # -------------------------------------------------
+                    # ---------------------------------------------
+                    # SEND AI REPLY TO CUSTOMER
+                    # ---------------------------------------------
 
                     send_whatsapp_message(
                         to_phone=sender,
                         message=ai_reply,
                     )
+
+                    # ---------------------------------------------
+                    # HOT LEAD NOTIFICATION
+                    #
+                    # ONLY send notification when this message
+                    # newly triggers handoff.
+                    # ---------------------------------------------
+
+                    if (
+                        handoff_triggered
+                        and not old_handoff_required
+                    ):
+
+                        agent_settings = (
+                            get_agent_settings()
+                        )
+
+                        print(
+                            "Agent Settings:",
+                            agent_settings,
+                        )
+
+                        send_hot_lead_notification(
+                            customer=customer,
+                            profile=profile,
+                            agent_settings=(
+                                agent_settings
+                            ),
+                        )
 
         return jsonify({
             "status": "ok"
@@ -912,7 +1201,10 @@ def webhook():
 
     except Exception as e:
 
-        print("Webhook error:", str(e))
+        print(
+            "Webhook error:",
+            str(e),
+        )
 
         return jsonify({
             "status": "error",
@@ -929,7 +1221,7 @@ if __name__ == "__main__":
     port = int(
         os.environ.get(
             "PORT",
-            5000
+            5000,
         )
     )
 
