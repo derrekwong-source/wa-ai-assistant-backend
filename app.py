@@ -19,6 +19,10 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
+# =========================================================
+# SYSTEM INSTRUCTIONS
+# =========================================================
+
 SYSTEM_INSTRUCTIONS = """
 You are the first-line WhatsApp customer service assistant for
 Good Deal Properties.
@@ -31,75 +35,79 @@ Keep replies short, friendly and natural for WhatsApp.
 IMPORTANT CONVERSATION RULES:
 
 1. Remember everything the customer has already told you.
-2. The LATEST information provided by the customer always
-   overrides older information.
-3. If the customer changes their budget, location, property type,
-   intent, or other requirement, immediately use the new information.
-4. Never continue using an old value after the customer has
-   clearly updated it.
-5. Do NOT ask the same question again if the customer has already answered it.
-6. Have a natural conversation, one or two questions at a time.
-7. Do not ask all qualification questions at once.
-8. Use information already provided by the customer.
+2. Do NOT ask the same question again if the customer already answered it.
+3. Ask only one or two useful questions at a time.
+4. Use the customer's latest information when something changes.
+5. If the customer changes their budget, location, property type,
+   or other requirement, always use the latest information.
+6. Do not ignore an updated budget.
 
-Try to understand these customer details naturally:
+CUSTOMER INFORMATION TO UNDERSTAND NATURALLY:
+
 - Name
 - Own stay or investment
 - Preferred location
 - Budget
 - Property type
-- Which property/project they are interested in
+- Interested property/project
 
 LISTING RULES:
 
-1. Only recommend listings when the customer's property type,
-   location and budget are all known.
+If the system provides matching listings from the database,
+you MUST use those listings as the source of truth.
 
-2. If any of these three required search fields are missing,
-   DO NOT search for listings.
+Do NOT invent:
+- asking price
+- land area
+- built-up
+- tenure
+- location
+- property status
+- property features
 
-3. If any of these three required search fields are missing,
-   DO NOT recommend any specific property.
+If a matching listing is provided, you may present its information
+to the customer.
 
-4. If the customer updates one of these fields,
-   immediately use the updated value for the next search.
+If no matching listing is provided, do not invent a property.
 
-5. The customer's current budget is authoritative.
-   Never recommend a property above the current budget.
+IMPORTANT:
 
-6. If matching listings are provided, use ONLY those listings.
+When the customer already has:
+- location
+- property type
+- budget
 
-7. Do not make up property information.
+the system should search the listing database first.
 
-8. Do not invent prices, sizes, locations or availability.
+If matching listings are found:
+- mention the suitable listing
+- provide the available listing details
+- ask whether the customer wants more details or a viewing
 
-9. If a matching listing exists, you may introduce it naturally.
+Do NOT keep asking qualification questions first when a suitable
+listing is already available.
 
-10. If no matching listing exists, tell the customer that there
-    is currently no suitable listing found in the available
-    database and that a property consultant can assist.
+If the customer asks about:
+- latest availability
+- negotiation
+- discount
+- viewing
+- legal matters
+- loan
+- anything uncertain
 
-11. Do not promise discounts.
+do not make promises or decisions.
 
-12. Do not negotiate prices.
-
-13. Do not give legal, tax or loan advice.
-
-14. Do not claim that a property is available unless its
-    property_status indicates it is available.
-
-15. The database listing status is not guaranteed to be
-    real-time availability.
-
-16. If the customer asks whether a property is still available,
-    explain that the listing is currently marked as available
-    in the database but a property consultant should confirm
-    the latest status.
+Tell the customer that a property consultant can confirm or assist.
 
 You are a first-line assistant, not the salesperson.
 Do not try to close the deal yourself.
 """
 
+
+# =========================================================
+# SUPABASE
+# =========================================================
 
 def supabase_headers():
     return {
@@ -108,6 +116,10 @@ def supabase_headers():
         "Content-Type": "application/json"
     }
 
+
+# =========================================================
+# CUSTOMER FUNCTIONS
+# =========================================================
 
 def get_customer(phone):
     url = f"{SUPABASE_URL}/rest/v1/customers"
@@ -160,12 +172,59 @@ def create_customer(phone):
     return data[0]
 
 
+def update_customer(customer_id, profile):
+    url = f"{SUPABASE_URL}/rest/v1/customers"
+
+    payload = {}
+
+    fields = [
+        "name",
+        "intent",
+        "location",
+        "budget",
+        "property_type",
+        "interested_property",
+        "lead_status"
+    ]
+
+    for field in fields:
+
+        value = profile.get(field)
+
+        if value is not None and value != "":
+            payload[field] = value
+
+    payload["last_message_at"] = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    headers = supabase_headers()
+    headers["Prefer"] = "return=minimal"
+
+    response = requests.patch(
+        url,
+        headers=headers,
+        params={
+            "id": f"eq.{customer_id}"
+        },
+        json=payload,
+        timeout=15
+    )
+
+    response.raise_for_status()
+
+
+# =========================================================
+# MESSAGE FUNCTIONS
+# =========================================================
+
 def save_message(
     customer_id,
     sender,
     message,
     whatsapp_message_id=None
 ):
+
     url = f"{SUPABASE_URL}/rest/v1/messages"
 
     payload = {
@@ -190,44 +249,8 @@ def save_message(
     response.raise_for_status()
 
 
-def update_customer(customer_id, profile):
-    url = f"{SUPABASE_URL}/rest/v1/customers"
-
-    payload = {}
-
-    for field in [
-        "name",
-        "intent",
-        "location",
-        "budget",
-        "property_type",
-        "interested_property",
-        "lead_status"
-    ]:
-        value = profile.get(field)
-
-        if value is not None and value != "":
-            payload[field] = value
-
-    payload["last_message_at"] = (
-        datetime.now(timezone.utc).isoformat()
-    )
-
-    headers = supabase_headers()
-    headers["Prefer"] = "return=minimal"
-
-    response = requests.patch(
-        url,
-        headers=headers,
-        params={"id": f"eq.{customer_id}"},
-        json=payload,
-        timeout=15
-    )
-
-    response.raise_for_status()
-
-
 def get_conversation_history(customer_id):
+
     url = f"{SUPABASE_URL}/rest/v1/messages"
 
     params = {
@@ -253,12 +276,14 @@ def get_conversation_history(customer_id):
     for item in data:
 
         if item["sender"] == "customer":
+
             history.append({
                 "role": "user",
                 "content": item["message"]
             })
 
         elif item["sender"] == "ai":
+
             history.append({
                 "role": "assistant",
                 "content": item["message"]
@@ -267,20 +292,60 @@ def get_conversation_history(customer_id):
     return history
 
 
-def parse_money(value):
+# =========================================================
+# BUDGET PARSER
+# =========================================================
+
+def parse_budget(value):
 
     if not value:
         return None
 
-    text = (
-        str(value)
-        .lower()
-        .replace(",", "")
-        .replace(" ", "")
+    text = str(value).lower()
+    text = text.replace(",", "")
+    text = text.replace(" ", "")
+
+    # RM3m / RM3million
+    match = re.search(
+        r"rm?(\d+(?:\.\d+)?)m(?:illion)?",
+        text
     )
 
+    if match:
+        return float(match.group(1)) * 1_000_000
+
+    # RM3,000,000 / RM3000000
     match = re.search(
-        r"(\d+(?:\.\d+)?)\s*(million|m|k)?",
+        r"rm?(\d+(?:\.\d+)?)",
+        text
+    )
+
+    if match:
+        number = float(match.group(1))
+
+        if number < 10000:
+            return number * 1_000_000
+
+        return number
+
+    return None
+
+
+# =========================================================
+# PRICE PARSER
+# =========================================================
+
+def parse_price(value):
+
+    if not value:
+        return None
+
+    text = str(value).lower()
+    text = text.replace(",", "")
+    text = text.replace(" ", "")
+
+    match = re.search(
+        r"rm?(\d+(?:\.\d+)?)(m|million)?",
         text
     )
 
@@ -288,125 +353,36 @@ def parse_money(value):
         return None
 
     number = float(match.group(1))
-    unit = match.group(2)
 
-    if unit in ["million", "m"]:
+    if match.group(2):
         number *= 1_000_000
-
-    elif unit == "k":
-        number *= 1_000
 
     return number
 
 
-def get_budget_limit(budget):
+# =========================================================
+# LISTING SEARCH
+# =========================================================
 
-    if not budget:
-        return None
-
-    text = (
-        str(budget)
-        .lower()
-        .replace(",", "")
-    )
-
-    matches = re.findall(
-        r"\d+(?:\.\d+)?\s*(?:million|m|k)?",
-        text
-    )
-
-    values = []
-
-    for item in matches:
-
-        value = parse_money(item)
-
-        if value:
-            values.append(value)
-
-    if not values:
-        return None
-
-    return max(values)
-
-
-def extract_latest_budget(message):
-
-    if not message:
-        return None
-
-    text = str(message)
-
-    pattern = re.search(
-        r"""
-        (?:
-            budget
-            |
-            my\s+budget
-        )
-        \s*
-        (?:
-            is
-            |
-            now
-            |
-            :
-        )?
-        \s*
-        (?:RM\s*)?
-        (
-            \d+(?:\.\d+)?
-        )
-        \s*
-        (
-            million
-            |
-            m
-            |
-            k
-        )?
-        """,
-        text,
-        re.IGNORECASE | re.VERBOSE
-    )
-
-    if not pattern:
-        return None
-
-    number = pattern.group(1)
-    unit = pattern.group(2)
-
-    if not number:
-        return None
-
-    if unit:
-        return f"RM{number} {unit}"
-
-    return f"RM{number}"
-
-
-def get_matching_listings(profile):
+def search_listings(
+    location=None,
+    property_type=None,
+    budget=None
+):
 
     url = f"{SUPABASE_URL}/rest/v1/listings"
 
     params = {
         "select": "*",
-        "limit": "20",
-        "order": "created_at.desc"
+        "order": "created_at.desc",
+        "limit": "50"
     }
 
-    location = profile.get("location")
-    property_type = profile.get("property_type")
-
     if location:
-        params["location"] = (
-            f"ilike.*{location}*"
-        )
+        params["location"] = f"ilike.*{location}*"
 
     if property_type:
-        params["property_type"] = (
-            f"ilike.*{property_type}*"
-        )
+        params["property_type"] = f"ilike.*{property_type}*"
 
     response = requests.get(
         url,
@@ -419,41 +395,63 @@ def get_matching_listings(profile):
 
     listings = response.json()
 
-    budget_limit = get_budget_limit(
-        profile.get("budget")
-    )
+    budget_value = parse_budget(budget)
 
-    filtered_listings = []
+    suitable = []
 
     for listing in listings:
+
+        # -------------------------------------------------
+        # PROPERTY STATUS
+        # -------------------------------------------------
 
         status = str(
             listing.get("property_status") or ""
         ).lower()
 
-        if status in [
-            "sold",
-            "rented",
-            "withdrawn",
-            "inactive"
-        ]:
-            continue
+        if status:
 
-        asking_price = parse_money(
+            unavailable_words = [
+                "sold",
+                "rented",
+                "taken",
+                "unavailable",
+                "closed"
+            ]
+
+            if any(
+                word in status
+                for word in unavailable_words
+            ):
+                continue
+
+        # -------------------------------------------------
+        # PRICE CHECK
+        # -------------------------------------------------
+
+        asking_price = parse_price(
             listing.get("asking_price")
         )
 
-        if budget_limit and asking_price:
+        if budget_value is not None:
 
-            if asking_price > budget_limit:
-                continue
+            if asking_price is not None:
 
-        filtered_listings.append(listing)
+                # Customer budget must be able to cover
+                # the asking price.
+                if asking_price > budget_value:
+                    continue
 
-    return filtered_listings
+        suitable.append(listing)
+
+    return suitable
 
 
-def format_listings_for_ai(listings):
+# =========================================================
+# FORMAT LISTINGS FOR AI
+# =========================================================
+
+def format_listings(listings):
 
     if not listings:
         return "NO MATCHING LISTINGS FOUND."
@@ -462,59 +460,38 @@ def format_listings_for_ai(listings):
 
     for listing in listings:
 
-        output.append({
-            "listing_id": listing.get(
-                "listing_id"
-            ),
-            "property_type": listing.get(
-                "property_type"
-            ),
-            "location": listing.get(
-                "location"
-            ),
-            "land_area": listing.get(
-                "land_area"
-            ),
-            "built_up": listing.get(
-                "built_up"
-            ),
-            "asking_price": listing.get(
-                "asking_price"
-            ),
-            "tenure": listing.get(
-                "tenure"
-            ),
-            "property_status": listing.get(
-                "property_status"
-            ),
-            "suitable_for": listing.get(
-                "suitable_for"
-            ),
-            "description": listing.get(
-                "description"
-            )
-        })
+        item = {
+            "listing_id": listing.get("listing_id"),
+            "property_type": listing.get("property_type"),
+            "location": listing.get("location"),
+            "land_area": listing.get("land_area"),
+            "built_up": listing.get("built_up"),
+            "asking_price": listing.get("asking_price"),
+            "tenure": listing.get("tenure"),
+            "property_status": listing.get("property_status"),
+            "suitable_for": listing.get("suitable_for"),
+            "description": listing.get("description")
+        }
+
+        output.append(item)
 
     return json.dumps(
         output,
-        ensure_ascii=False
+        ensure_ascii=False,
+        indent=2
     )
 
+
+# =========================================================
+# WEBHOOK VERIFY
+# =========================================================
 
 @app.route("/webhook", methods=["GET"])
 def verify():
 
-    mode = request.args.get(
-        "hub.mode"
-    )
-
-    token = request.args.get(
-        "hub.verify_token"
-    )
-
-    challenge = request.args.get(
-        "hub.challenge"
-    )
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
 
     if (
         mode == "subscribe"
@@ -524,6 +501,10 @@ def verify():
 
     return "Verification failed", 403
 
+
+# =========================================================
+# WHATSAPP WEBHOOK
+# =========================================================
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -537,13 +518,11 @@ def webhook():
 
     try:
 
-        value = data[
-            "entry"
-        ][0][
-            "changes"
-        ][0][
-            "value"
-        ]
+        value = (
+            data["entry"][0]
+            ["changes"][0]
+            ["value"]
+        )
 
         messages = value.get(
             "messages",
@@ -564,8 +543,8 @@ def webhook():
             message["text"]["body"]
         )
 
-        whatsapp_message_id = (
-            message.get("id")
+        whatsapp_message_id = message.get(
+            "id"
         )
 
         print(
@@ -578,15 +557,16 @@ def webhook():
             customer_message
         )
 
-        # --------------------------------------------------
-        # FIND OR CREATE CUSTOMER
-        # --------------------------------------------------
+        # -------------------------------------------------
+        # CUSTOMER
+        # -------------------------------------------------
 
         customer = get_customer(
             customer_phone
         )
 
         if not customer:
+
             customer = create_customer(
                 customer_phone
             )
@@ -598,9 +578,9 @@ def webhook():
             customer_id
         )
 
-        # --------------------------------------------------
+        # -------------------------------------------------
         # SAVE CUSTOMER MESSAGE
-        # --------------------------------------------------
+        # -------------------------------------------------
 
         save_message(
             customer_id,
@@ -609,9 +589,9 @@ def webhook():
             whatsapp_message_id
         )
 
-        # --------------------------------------------------
-        # LOAD HISTORY
-        # --------------------------------------------------
+        # -------------------------------------------------
+        # GET CONVERSATION
+        # -------------------------------------------------
 
         conversation_history = (
             get_conversation_history(
@@ -619,70 +599,51 @@ def webhook():
             )
         )
 
-        # --------------------------------------------------
-        # EXTRACT CUSTOMER PROFILE
-        # --------------------------------------------------
+        # -------------------------------------------------
+        # FIRST AI PASS
+        #
+        # Extract latest customer profile
+        # -------------------------------------------------
 
         profile_response = (
             openai_client.responses.create(
 
                 model="gpt-5.6-luna",
 
-                instructions="""
-Extract the customer's CURRENT property-search profile.
+                instructions=SYSTEM_INSTRUCTIONS
+                + """
 
-The latest customer message has priority over
-all previous messages.
+Extract the customer's profile based ONLY
+on information already provided in the conversation.
 
-If the customer changes a value, replace the
-old value with the new value.
+Do not guess.
+
+If a field is unknown, return null.
+
+For budget, keep the customer's wording.
 
 Examples:
-
-Previous:
-Budget RM3 million
-
-Latest:
-My budget is RM2.5 million.
-
-Current budget:
-RM2.5 million
-
-Previous:
-Puchong
-
-Latest:
-I'm now looking in Shah Alam.
-
-Current location:
-Shah Alam
-
-Do not keep outdated values when the customer
-clearly provides a new value.
-
-Do not guess missing information.
-
-For budget, use the latest value provided
-by the customer.
+- RM3 million
+- RM2m
+- RM2.5 million
 
 For intent:
 - Own Stay
 - Investment
-- null
+
+If not known, return null.
 
 For lead_status:
-- New Lead
+use New Lead unless the conversation clearly
+indicates a more advanced lead.
 """,
 
                 input=conversation_history,
 
                 text={
                     "format": {
-
                         "type": "json_schema",
-
                         "name": "customer_profile",
-
                         "schema": {
 
                             "type": "object",
@@ -762,359 +723,154 @@ For lead_status:
             profile_response.output_text
         )
 
-        # --------------------------------------------------
-        # FORCE LATEST EXPLICIT BUDGET
-        # --------------------------------------------------
-
-        latest_budget = (
-            extract_latest_budget(
-                customer_message
-            )
-        )
-
-        budget_was_updated = False
-
-        if latest_budget:
-
-            old_budget = customer_profile.get(
-                "budget"
-            )
-
-            customer_profile["budget"] = (
-                latest_budget
-            )
-
-            budget_was_updated = True
-
-            print(
-                "Budget updated:",
-                old_budget,
-                "->",
-                latest_budget
-            )
-
         print(
             "Customer Profile:",
             customer_profile
         )
 
-        # --------------------------------------------------
-        # UPDATE DATABASE
-        # --------------------------------------------------
+        # -------------------------------------------------
+        # UPDATE CUSTOMER DATABASE
+        # -------------------------------------------------
 
         update_customer(
             customer_id,
             customer_profile
         )
 
-        # --------------------------------------------------
-        # SEARCH REQUIREMENTS
-        # --------------------------------------------------
+        # -------------------------------------------------
+        # LISTING SEARCH
+        # -------------------------------------------------
 
-        property_type = (
-            customer_profile.get(
-                "property_type"
-            )
+        location = customer_profile.get(
+            "location"
         )
 
-        location = (
-            customer_profile.get(
-                "location"
-            )
+        property_type = customer_profile.get(
+            "property_type"
         )
 
-        budget = (
-            customer_profile.get(
-                "budget"
-            )
+        budget = customer_profile.get(
+            "budget"
         )
 
-        search_ready = bool(
-            property_type
-            and location
+        matching_listings = []
+
+        # Search only when enough information exists.
+        if (
+            location
+            and property_type
             and budget
-        )
+        ):
 
-        print(
-            "Search ready:",
-            search_ready
-        )
-
-        # --------------------------------------------------
-        # SEARCH LISTINGS
-        # --------------------------------------------------
-
-        if search_ready:
-
-            matching_listings = (
-                get_matching_listings(
-                    customer_profile
-                )
+            matching_listings = search_listings(
+                location=location,
+                property_type=property_type,
+                budget=budget
             )
-
-        else:
-
-            matching_listings = []
 
         print(
             "Matching Listings:",
             matching_listings
         )
 
-        # --------------------------------------------------
-        # IMPORTANT:
-        # IF CUSTOMER JUST UPDATED BUDGET AND THERE IS
-        # NO MATCH, DO NOT LET THE AI USE OLD LISTINGS
-        # --------------------------------------------------
+        listing_context = format_listings(
+            matching_listings
+        )
 
-        if budget_was_updated and not matching_listings:
+        # -------------------------------------------------
+        # FINAL AI RESPONSE
+        # -------------------------------------------------
 
-            ai_reply = (
-                f"Thanks 😊 I’ve updated your budget "
-                f"to {latest_budget}. "
-                f"Currently, I don’t have a suitable "
-                f"listing within this budget in our "
-                f"available database. "
-                f"A property consultant can assist "
-                f"with other options."
-            )
+        final_instructions = SYSTEM_INSTRUCTIONS + """
 
-        elif not search_ready:
+You must now write the actual WhatsApp reply.
 
-            missing_fields = []
+CUSTOMER PROFILE:
 
-            if not property_type:
-                missing_fields.append(
-                    "property type"
-                )
+""" + json.dumps(
+            customer_profile,
+            ensure_ascii=False,
+            indent=2
+        ) + """
 
-            if not location:
-                missing_fields.append(
-                    "location"
-                )
+LISTINGS FOUND FROM DATABASE:
 
-            if not budget:
-                missing_fields.append(
-                    "budget"
-                )
+""" + listing_context + """
 
-            if len(missing_fields) == 1:
+VERY IMPORTANT:
 
-                ai_reply = (
-                    "Sure 😊 Could you let me know "
-                    f"your {missing_fields[0]}?"
-                )
+If LISTINGS FOUND contains one or more listings:
 
-            else:
+1. Prioritize the matching listing.
+2. Do not ask unnecessary qualification questions first.
+3. Present the listing naturally.
+4. Only use the information provided in the listing.
+5. You may mention:
+   - asking price
+   - land area
+   - built-up
+   - tenure
+   - property status
+   - suitable_for
+   - description
+6. Do not invent missing information.
+7. Ask if the customer wants more details or a viewing.
 
-                ai_reply = (
-                    "Sure 😊 Could you let me know "
-                    + " and ".join(
-                        missing_fields
-                    )
-                    + "?"
-                )
+If LISTINGS FOUND says:
 
-        else:
+NO MATCHING LISTINGS FOUND.
 
-            # --------------------------------------------------
-            # FORMAT CURRENT LISTINGS ONLY
-            # --------------------------------------------------
+Then clearly tell the customer that there is currently
+no suitable listing found based on the latest requirement.
 
-            listings_context = (
-                format_listings_for_ai(
-                    matching_listings
-                )
-            )
+If the customer changed their budget, always use
+the NEW budget.
 
-            # --------------------------------------------------
-            # GENERATE REPLY USING CURRENT LISTINGS ONLY
-            # --------------------------------------------------
+Example:
 
-            response = (
-                openai_client.responses.create(
+Previous budget: RM3 million
+New budget: RM2.5 million
 
-                    model="gpt-5.6-luna",
+Do NOT recommend a RM3 million property when the
+customer's latest budget is RM2.5 million.
 
-                    instructions=(
-                        SYSTEM_INSTRUCTIONS
-                        + f"""
-
-CURRENT CUSTOMER PROFILE:
-
-{json.dumps(
-    customer_profile,
-    ensure_ascii=False
-)}
-
-
-CURRENT DATABASE MATCHES:
-
-{listings_context}
-
+If the customer changes back to RM3 million,
+the RM3 million listing can become suitable again.
 
 IMPORTANT:
+If the customer asks about availability, do not guarantee
+that the property is still available. Say that the listing
+is currently marked available in the database and that
+a property consultant can confirm the latest status.
 
-The listings above are the ONLY listings
-you may recommend.
+If the customer asks about negotiation, do not confirm
+that the price is negotiable. A property consultant can
+advise on the seller's terms.
 
-Do NOT use an older property from the
-conversation if it is not included above.
-
-The customer's CURRENT budget is:
-
-{budget}
-
-Never recommend a property above that budget.
-
-If the customer has just changed their
-requirements, use the current database
-matches only.
-
-Keep the reply short and natural.
+Keep the WhatsApp reply concise and natural.
 """
-                    ),
 
-                    input=[
-                        {
-                            "role": "user",
-                            "content": customer_message
-                        }
-                    ],
+        final_response = (
+            openai_client.responses.create(
 
-                    text={
-                        "format": {
+                model="gpt-5.6-luna",
 
-                            "type": "json_schema",
+                instructions=final_instructions,
 
-                            "name": "customer_reply",
-
-                            "schema": {
-
-                                "type": "object",
-
-                                "properties": {
-
-                                    "reply": {
-                                        "type": "string"
-                                    },
-
-                                    "profile": {
-
-                                        "type": "object",
-
-                                        "properties": {
-
-                                            "name": {
-                                                "type": [
-                                                    "string",
-                                                    "null"
-                                                ]
-                                            },
-
-                                            "intent": {
-                                                "type": [
-                                                    "string",
-                                                    "null"
-                                                ]
-                                            },
-
-                                            "location": {
-                                                "type": [
-                                                    "string",
-                                                    "null"
-                                                ]
-                                            },
-
-                                            "budget": {
-                                                "type": [
-                                                    "string",
-                                                    "null"
-                                                ]
-                                            },
-
-                                            "property_type": {
-                                                "type": [
-                                                    "string",
-                                                    "null"
-                                                ]
-                                            },
-
-                                            "interested_property": {
-                                                "type": [
-                                                    "string",
-                                                    "null"
-                                                ]
-                                            },
-
-                                            "lead_status": {
-                                                "type": [
-                                                    "string",
-                                                    "null"
-                                                ]
-                                            }
-                                        },
-
-                                        "required": [
-                                            "name",
-                                            "intent",
-                                            "location",
-                                            "budget",
-                                            "property_type",
-                                            "interested_property",
-                                            "lead_status"
-                                        ],
-
-                                        "additionalProperties": False
-                                    }
-                                },
-
-                                "required": [
-                                    "reply",
-                                    "profile"
-                                ],
-
-                                "additionalProperties": False
-                            },
-
-                            "strict": True
-                        }
-                    }
-                )
+                input=conversation_history
             )
+        )
 
-            result = json.loads(
-                response.output_text
-            )
-
-            ai_reply = result["reply"]
-
-            final_profile = result[
-                "profile"
-            ]
-
-            # Never allow an older budget to overwrite
-            # the latest budget.
-
-            if latest_budget:
-
-                final_profile["budget"] = (
-                    latest_budget
-                )
-
-            update_customer(
-                customer_id,
-                final_profile
-            )
+        ai_reply = final_response.output_text.strip()
 
         print(
             "AI Reply:",
             ai_reply
         )
 
-        # --------------------------------------------------
+        # -------------------------------------------------
         # SAVE AI MESSAGE
-        # --------------------------------------------------
+        # -------------------------------------------------
 
         save_message(
             customer_id,
@@ -1122,32 +878,37 @@ Keep the reply short and natural.
             ai_reply
         )
 
-        # --------------------------------------------------
-        # SEND WHATSAPP MESSAGE
-        # --------------------------------------------------
+        # -------------------------------------------------
+        # SEND WHATSAPP
+        # -------------------------------------------------
 
         url = (
-            f"https://graph.facebook.com/v26.0/"
+            "https://graph.facebook.com/v26.0/"
             f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
         )
 
         headers = {
-            "Authorization": (
-                f"Bearer {WHATSAPP_ACCESS_TOKEN}"
-            ),
-            "Content-Type": "application/json"
+            "Authorization":
+                f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+
+            "Content-Type":
+                "application/json"
         }
 
         payload = {
 
-            "messaging_product": "whatsapp",
+            "messaging_product":
+                "whatsapp",
 
-            "to": customer_phone,
+            "to":
+                customer_phone,
 
-            "type": "text",
+            "type":
+                "text",
 
             "text": {
-                "body": ai_reply
+                "body":
+                    ai_reply
             }
         }
 
@@ -1174,6 +935,10 @@ Keep the reply short and natural.
     return "EVENT_RECEIVED", 200
 
 
+# =========================================================
+# HOME
+# =========================================================
+
 @app.route("/", methods=["GET"])
 def home():
 
@@ -1182,6 +947,10 @@ def home():
         200
     )
 
+
+# =========================================================
+# LOCAL RUN
+# =========================================================
 
 if __name__ == "__main__":
 
