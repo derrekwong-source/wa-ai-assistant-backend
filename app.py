@@ -30,11 +30,17 @@ Keep replies short, friendly and natural for WhatsApp.
 
 IMPORTANT CONVERSATION RULES:
 
-1. Remember everything the customer has already told you in this conversation.
-2. Do NOT ask the same question again if the customer has already answered it.
-3. Have a natural conversation, one or two questions at a time.
-4. Do not ask all qualification questions at once.
-5. Use information already provided by the customer.
+1. Remember everything the customer has already told you.
+2. The LATEST information provided by the customer always
+   overrides older information.
+3. If the customer changes their budget, location, property type,
+   intent, or other requirement, immediately use the new information.
+4. Do NOT continue using an old value after the customer has
+   clearly updated it.
+5. Do NOT ask the same question again if the customer has already answered it.
+6. Have a natural conversation, one or two questions at a time.
+7. Do not ask all qualification questions at once.
+8. Use information already provided by the customer.
 
 Try to understand these customer details naturally:
 - Name
@@ -55,10 +61,12 @@ LISTING RULES:
 3. If any of these three required search fields are missing,
    DO NOT recommend any specific property.
 
-4. If any required search field is missing, naturally ask for
-   the missing information.
+4. If the customer updates one of these fields,
+   immediately use the updated value for the next search.
 
-5. Ask only one or two questions at a time.
+5. If the customer changes their budget from an old value
+   to a new value, the new budget must completely replace
+   the old budget for listing search.
 
 6. If matching listings are provided, use ONLY those listings.
 
@@ -82,10 +90,12 @@ LISTING RULES:
     property_status indicates it is available.
 
 15. The database listing status is not guaranteed to be
-    real-time availability. If the customer asks whether
-    a property is still available, explain that the listing
-    is currently marked as available in the database but
-    a property consultant should confirm the latest status.
+    real-time availability.
+
+16. If the customer asks whether a property is still available,
+    explain that the listing is currently marked as available
+    in the database but a property consultant should confirm
+    the latest status.
 
 You are a first-line assistant, not the salesperson.
 Do not try to close the deal yourself.
@@ -301,7 +311,7 @@ def parse_money(value):
 
 def get_budget_limit(budget):
     """
-    Try to determine the customer's maximum budget.
+    Determine the customer's maximum budget.
 
     Examples:
     RM3m -> 3000000
@@ -326,6 +336,7 @@ def get_budget_limit(budget):
     values = []
 
     for item in matches:
+
         value = parse_money(item)
 
         if value:
@@ -337,11 +348,77 @@ def get_budget_limit(budget):
     return max(values)
 
 
+def extract_latest_budget(message):
+    """
+    Detect an explicitly updated budget from the customer's
+    latest message.
+
+    This is intentionally deterministic so that a new budget
+    always overrides the old budget.
+    """
+
+    if not message:
+        return None
+
+    text = str(message)
+
+    # Look specifically for phrases such as:
+    # budget is RM2.5 million
+    # my budget is RM2.5m
+    # budget RM2.5m
+    # budget: RM2.5m
+
+    pattern = re.search(
+        r"""
+        (?:
+            budget
+            |
+            my\s+budget
+        )
+        \s*
+        (?:
+            is
+            |
+            now
+            |
+            :
+        )?
+        \s*
+        (RM\s*)?
+        (
+            \d+(?:\.\d+)?
+        )
+        \s*
+        (
+            million
+            |
+            m
+            |
+            k
+        )?
+        """,
+        text,
+        re.IGNORECASE | re.VERBOSE
+    )
+
+    if not pattern:
+        return None
+
+    number = pattern.group(2)
+    unit = pattern.group(3)
+
+    if not number:
+        return None
+
+    result = f"RM{number}"
+
+    if unit:
+        result += f" {unit}"
+
+    return result.strip()
+
+
 def get_matching_listings(profile):
-    """
-    Search the listings table using the customer's
-    known location and property type.
-    """
 
     url = f"{SUPABASE_URL}/rest/v1/listings"
 
@@ -355,7 +432,9 @@ def get_matching_listings(profile):
     property_type = profile.get("property_type")
 
     if location:
-        params["location"] = f"ilike.*{location}*"
+        params["location"] = (
+            f"ilike.*{location}*"
+        )
 
     if property_type:
         params["property_type"] = (
@@ -417,13 +496,27 @@ def format_listings_for_ai(listings):
     for listing in listings:
 
         output.append({
-            "listing_id": listing.get("listing_id"),
-            "property_type": listing.get("property_type"),
-            "location": listing.get("location"),
-            "land_area": listing.get("land_area"),
-            "built_up": listing.get("built_up"),
-            "asking_price": listing.get("asking_price"),
-            "tenure": listing.get("tenure"),
+            "listing_id": listing.get(
+                "listing_id"
+            ),
+            "property_type": listing.get(
+                "property_type"
+            ),
+            "location": listing.get(
+                "location"
+            ),
+            "land_area": listing.get(
+                "land_area"
+            ),
+            "built_up": listing.get(
+                "built_up"
+            ),
+            "asking_price": listing.get(
+                "asking_price"
+            ),
+            "tenure": listing.get(
+                "tenure"
+            ),
             "property_status": listing.get(
                 "property_status"
             ),
@@ -444,9 +537,17 @@ def format_listings_for_ai(listings):
 @app.route("/webhook", methods=["GET"])
 def verify():
 
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
+    mode = request.args.get(
+        "hub.mode"
+    )
+
+    token = request.args.get(
+        "hub.verify_token"
+    )
+
+    challenge = request.args.get(
+        "hub.challenge"
+    )
 
     if (
         mode == "subscribe"
@@ -491,12 +592,13 @@ def webhook():
             return "EVENT_RECEIVED", 200
 
         customer_phone = message["from"]
-        customer_message = message[
-            "text"
-        ]["body"]
 
-        whatsapp_message_id = message.get(
-            "id"
+        customer_message = (
+            message["text"]["body"]
+        )
+
+        whatsapp_message_id = (
+            message.get("id")
         )
 
         print(
@@ -564,6 +666,37 @@ def webhook():
 You are extracting customer property-search
 information from a WhatsApp conversation.
 
+IMPORTANT:
+
+The LATEST customer message has priority
+over all previous customer messages.
+
+If the customer changes a value, the latest
+value MUST replace the previous value.
+
+Examples:
+
+Previous:
+Budget RM3 million
+
+Latest:
+"My budget is RM2.5 million."
+
+Result:
+budget = "RM2.5 million"
+
+Previous:
+Puchong
+
+Latest:
+"I'm now looking in Shah Alam."
+
+Result:
+location = "Shah Alam"
+
+Do not keep the old value when the customer
+clearly provides a new value.
+
 Extract only information clearly provided
 by the customer.
 
@@ -571,7 +704,8 @@ Do not guess.
 
 If a field is unknown, return null.
 
-For budget, preserve the customer's wording.
+For budget, preserve the customer's
+latest wording.
 
 For intent:
 - Own Stay
@@ -589,6 +723,7 @@ a more advanced lead.
 
                 text={
                     "format": {
+
                         "type": "json_schema",
 
                         "name": "customer_profile",
@@ -672,6 +807,27 @@ a more advanced lead.
             profile_response.output_text
         )
 
+        # --------------------------------------------------
+        # FORCE LATEST BUDGET UPDATE
+        # --------------------------------------------------
+
+        latest_budget = (
+            extract_latest_budget(
+                customer_message
+            )
+        )
+
+        if latest_budget:
+
+            print(
+                "Latest explicit budget detected:",
+                latest_budget
+            )
+
+            customer_profile[
+                "budget"
+            ] = latest_budget
+
         print(
             "Customer Profile:",
             customer_profile
@@ -687,7 +843,7 @@ a more advanced lead.
         )
 
         # --------------------------------------------------
-        # CHECK IF LISTING SEARCH IS READY
+        # CHECK SEARCH REQUIREMENTS
         # --------------------------------------------------
 
         property_type = (
@@ -720,8 +876,7 @@ a more advanced lead.
         )
 
         # --------------------------------------------------
-        # SEARCH LISTINGS ONLY WHEN REQUIREMENTS
-        # ARE COMPLETE
+        # SEARCH LISTINGS
         # --------------------------------------------------
 
         if search_ready:
@@ -752,7 +907,7 @@ Do NOT recommend any listing.
 
 Do NOT mention any specific property.
 
-The required information for listing search is:
+The required information is:
 
 - Property type
 - Location
@@ -782,12 +937,17 @@ Ask only one or two questions at a time.
                     SYSTEM_INSTRUCTIONS
                     + f"""
 
-CUSTOMER PROFILE:
+CUSTOMER PROFILE — CURRENT AUTHORITATIVE VERSION:
 
 {json.dumps(
     customer_profile,
     ensure_ascii=False
 )}
+
+
+LATEST CUSTOMER MESSAGE:
+
+{customer_message}
 
 
 MATCHING LISTINGS FROM DATABASE:
@@ -797,57 +957,41 @@ MATCHING LISTINGS FROM DATABASE:
 
 IMPORTANT:
 
-FIRST PRIORITY — INCOMPLETE REQUIREMENTS
+The CUSTOMER PROFILE above is the current
+authoritative profile.
 
-If the customer's property type,
-location or budget is missing:
+The latest customer information overrides
+all older information.
 
-DO NOT recommend any listing.
+If the latest message changed the budget,
+use the new budget.
 
-DO NOT mention any specific property.
+Do NOT answer using an old budget.
 
-DO NOT say that no suitable listing
-was found.
+Do NOT recommend a listing that exceeds
+the customer's CURRENT budget.
 
-Instead, naturally ask for the missing
-information.
+If there are matching listings:
 
-Ask only one or two questions at a time.
-
-Examples:
-
-"Sure 😊 Which area are you looking for,
-and what's your budget?"
-
-"Sure 😊 Which area are you looking for?
-And is this for your own business
-or investment?"
-
-
-SECOND PRIORITY — COMPLETE REQUIREMENTS
-
-Only when property type, location and
-budget are all known should you use
-the listing database results.
-
-If matching listings are provided:
-
-- Use only the information provided.
+- Use only the database information.
 - You may mention one or two suitable listings.
 - Do not invent missing details.
-- Do not change the listed asking price.
+- Do not change the asking price.
 - Do not claim availability beyond
-  the property_status.
-- If appropriate, ask whether the customer
-  would like more details.
+  property_status.
 
-If NO MATCHING LISTINGS FOUND:
+If there are NO matching listings:
 
 - Do not invent a property.
 - Tell the customer that no suitable
   listing was found in the current database.
 - A property consultant can assist
   with other options.
+
+If the customer is simply asking about
+a previously mentioned listing, use the
+available conversation context and listing
+information.
 
 Keep the WhatsApp reply short,
 friendly and natural.
@@ -963,9 +1107,20 @@ friendly and natural.
 
         ai_reply = result["reply"]
 
-        customer_profile = result[
+        final_profile = result[
             "profile"
         ]
+
+        # --------------------------------------------------
+        # NEVER ALLOW AI TO OVERWRITE A NEWER BUDGET
+        # WITH AN OLD VALUE
+        # --------------------------------------------------
+
+        if latest_budget:
+
+            final_profile[
+                "budget"
+            ] = latest_budget
 
         print(
             "AI Reply:",
@@ -973,17 +1128,17 @@ friendly and natural.
         )
 
         print(
-            "Customer Profile:",
-            customer_profile
+            "Final Customer Profile:",
+            final_profile
         )
 
         # --------------------------------------------------
-        # UPDATE CUSTOMER PROFILE AGAIN
+        # UPDATE CUSTOMER PROFILE
         # --------------------------------------------------
 
         update_customer(
             customer_id,
-            customer_profile
+            final_profile
         )
 
         # --------------------------------------------------
@@ -997,7 +1152,7 @@ friendly and natural.
         )
 
         # --------------------------------------------------
-        # SEND REPLY THROUGH WHATSAPP
+        # SEND WHATSAPP REPLY
         # --------------------------------------------------
 
         url = (
