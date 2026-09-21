@@ -397,11 +397,17 @@ def dashboard():
             )
         )
 
-        phone = escape(
-            str(
-                lead.get("whatsapp_phone")
-                or "-"
-            )
+        phone_raw = str(
+            lead.get("whatsapp_phone")
+            or "-"
+        )
+
+        phone = escape(phone_raw)
+
+        phone_digits = re.sub(
+            r"\\D",
+            "",
+            phone_raw
         )
 
         intent = escape(
@@ -495,7 +501,12 @@ def dashboard():
 
             <td>
                 <strong>{name}</strong><br>
-                <span class="phone">{phone}</span>
+                <a
+                    class="phone whatsapp-link"
+                    href="https://wa.me/{phone_digits}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >{phone}</a>
             </td>
 
             <td>{intent}</td>
@@ -707,6 +718,12 @@ tr:hover {{
 .phone {{
     color: #64748b;
     font-size: 12px;
+    text-decoration: none;
+}}
+
+.whatsapp-link:hover {{
+    color: #16a34a;
+    text-decoration: underline;
 }}
 
 .property {{
