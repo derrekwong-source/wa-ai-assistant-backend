@@ -35,7 +35,7 @@ IMPORTANT CONVERSATION RULES:
    overrides older information.
 3. If the customer changes their budget, location, property type,
    intent, or other requirement, immediately use the new information.
-4. Do NOT continue using an old value after the customer has
+4. Never continue using an old value after the customer has
    clearly updated it.
 5. Do NOT ask the same question again if the customer has already answered it.
 6. Have a natural conversation, one or two questions at a time.
@@ -64,9 +64,8 @@ LISTING RULES:
 4. If the customer updates one of these fields,
    immediately use the updated value for the next search.
 
-5. If the customer changes their budget from an old value
-   to a new value, the new budget must completely replace
-   the old budget for listing search.
+5. The customer's current budget is authoritative.
+   Never recommend a property above the current budget.
 
 6. If matching listings are provided, use ONLY those listings.
 
@@ -269,15 +268,6 @@ def get_conversation_history(customer_id):
 
 
 def parse_money(value):
-    """
-    Convert common Malaysian price formats into numeric RM.
-
-    Examples:
-    RM3 million -> 3000000
-    RM3m -> 3000000
-    RM2.5m -> 2500000
-    RM800k -> 800000
-    """
 
     if not value:
         return None
@@ -300,7 +290,7 @@ def parse_money(value):
     number = float(match.group(1))
     unit = match.group(2)
 
-    if unit == "million" or unit == "m":
+    if unit in ["million", "m"]:
         number *= 1_000_000
 
     elif unit == "k":
@@ -310,14 +300,6 @@ def parse_money(value):
 
 
 def get_budget_limit(budget):
-    """
-    Determine the customer's maximum budget.
-
-    Examples:
-    RM3m -> 3000000
-    RM2m - RM3m -> 3000000
-    below RM3m -> 3000000
-    """
 
     if not budget:
         return None
@@ -349,24 +331,11 @@ def get_budget_limit(budget):
 
 
 def extract_latest_budget(message):
-    """
-    Detect an explicitly updated budget from the customer's
-    latest message.
-
-    This is intentionally deterministic so that a new budget
-    always overrides the old budget.
-    """
 
     if not message:
         return None
 
     text = str(message)
-
-    # Look specifically for phrases such as:
-    # budget is RM2.5 million
-    # my budget is RM2.5m
-    # budget RM2.5m
-    # budget: RM2.5m
 
     pattern = re.search(
         r"""
@@ -384,7 +353,7 @@ def extract_latest_budget(message):
             :
         )?
         \s*
-        (RM\s*)?
+        (?:RM\s*)?
         (
             \d+(?:\.\d+)?
         )
@@ -404,18 +373,16 @@ def extract_latest_budget(message):
     if not pattern:
         return None
 
-    number = pattern.group(2)
-    unit = pattern.group(3)
+    number = pattern.group(1)
+    unit = pattern.group(2)
 
     if not number:
         return None
 
-    result = f"RM{number}"
-
     if unit:
-        result += f" {unit}"
+        return f"RM{number} {unit}"
 
-    return result.strip()
+    return f"RM{number}"
 
 
 def get_matching_listings(profile):
@@ -643,7 +610,7 @@ def webhook():
         )
 
         # --------------------------------------------------
-        # LOAD CONVERSATION HISTORY
+        # LOAD HISTORY
         # --------------------------------------------------
 
         conversation_history = (
@@ -653,7 +620,6 @@ def webhook():
         )
 
         # --------------------------------------------------
-        # FIRST AI PASS
         # EXTRACT CUSTOMER PROFILE
         # --------------------------------------------------
 
@@ -663,16 +629,13 @@ def webhook():
                 model="gpt-5.6-luna",
 
                 instructions="""
-You are extracting customer property-search
-information from a WhatsApp conversation.
+Extract the customer's CURRENT property-search profile.
 
-IMPORTANT:
+The latest customer message has priority over
+all previous messages.
 
-The LATEST customer message has priority
-over all previous customer messages.
-
-If the customer changes a value, the latest
-value MUST replace the previous value.
+If the customer changes a value, replace the
+old value with the new value.
 
 Examples:
 
@@ -680,32 +643,27 @@ Previous:
 Budget RM3 million
 
 Latest:
-"My budget is RM2.5 million."
+My budget is RM2.5 million.
 
-Result:
-budget = "RM2.5 million"
+Current budget:
+RM2.5 million
 
 Previous:
 Puchong
 
 Latest:
-"I'm now looking in Shah Alam."
+I'm now looking in Shah Alam.
 
-Result:
-location = "Shah Alam"
+Current location:
+Shah Alam
 
-Do not keep the old value when the customer
+Do not keep outdated values when the customer
 clearly provides a new value.
 
-Extract only information clearly provided
+Do not guess missing information.
+
+For budget, use the latest value provided
 by the customer.
-
-Do not guess.
-
-If a field is unknown, return null.
-
-For budget, preserve the customer's
-latest wording.
 
 For intent:
 - Own Stay
@@ -714,9 +672,6 @@ For intent:
 
 For lead_status:
 - New Lead
-
-unless the conversation clearly indicates
-a more advanced lead.
 """,
 
                 input=conversation_history,
@@ -808,7 +763,7 @@ a more advanced lead.
         )
 
         # --------------------------------------------------
-        # FORCE LATEST BUDGET UPDATE
+        # FORCE LATEST EXPLICIT BUDGET
         # --------------------------------------------------
 
         latest_budget = (
@@ -817,16 +772,26 @@ a more advanced lead.
             )
         )
 
+        budget_was_updated = False
+
         if latest_budget:
 
-            print(
-                "Latest explicit budget detected:",
+            old_budget = customer_profile.get(
+                "budget"
+            )
+
+            customer_profile["budget"] = (
                 latest_budget
             )
 
-            customer_profile[
-                "budget"
-            ] = latest_budget
+            budget_was_updated = True
+
+            print(
+                "Budget updated:",
+                old_budget,
+                "->",
+                latest_budget
+            )
 
         print(
             "Customer Profile:",
@@ -834,7 +799,7 @@ a more advanced lead.
         )
 
         # --------------------------------------------------
-        # UPDATE CUSTOMER PROFILE
+        # UPDATE DATABASE
         # --------------------------------------------------
 
         update_customer(
@@ -843,7 +808,7 @@ a more advanced lead.
         )
 
         # --------------------------------------------------
-        # CHECK SEARCH REQUIREMENTS
+        # SEARCH REQUIREMENTS
         # --------------------------------------------------
 
         property_type = (
@@ -887,36 +852,9 @@ a more advanced lead.
                 )
             )
 
-            listings_context = (
-                format_listings_for_ai(
-                    matching_listings
-                )
-            )
-
         else:
 
             matching_listings = []
-
-            listings_context = """
-LISTING SEARCH NOT PERFORMED.
-
-The customer's property search requirements
-are incomplete.
-
-Do NOT recommend any listing.
-
-Do NOT mention any specific property.
-
-The required information is:
-
-- Property type
-- Location
-- Budget
-
-Ask naturally for the missing information.
-
-Ask only one or two questions at a time.
-"""
 
         print(
             "Matching Listings:",
@@ -924,20 +862,85 @@ Ask only one or two questions at a time.
         )
 
         # --------------------------------------------------
-        # SECOND AI PASS
-        # GENERATE CUSTOMER REPLY
+        # IMPORTANT:
+        # IF CUSTOMER JUST UPDATED BUDGET AND THERE IS
+        # NO MATCH, DO NOT LET THE AI USE OLD LISTINGS
         # --------------------------------------------------
 
-        response = (
-            openai_client.responses.create(
+        if budget_was_updated and not matching_listings:
 
-                model="gpt-5.6-luna",
+            ai_reply = (
+                f"Thanks 😊 I’ve updated your budget "
+                f"to {latest_budget}. "
+                f"Currently, I don’t have a suitable "
+                f"listing within this budget in our "
+                f"available database. "
+                f"A property consultant can assist "
+                f"with other options."
+            )
 
-                instructions=(
-                    SYSTEM_INSTRUCTIONS
-                    + f"""
+        elif not search_ready:
 
-CUSTOMER PROFILE — CURRENT AUTHORITATIVE VERSION:
+            missing_fields = []
+
+            if not property_type:
+                missing_fields.append(
+                    "property type"
+                )
+
+            if not location:
+                missing_fields.append(
+                    "location"
+                )
+
+            if not budget:
+                missing_fields.append(
+                    "budget"
+                )
+
+            if len(missing_fields) == 1:
+
+                ai_reply = (
+                    "Sure 😊 Could you let me know "
+                    f"your {missing_fields[0]}?"
+                )
+
+            else:
+
+                ai_reply = (
+                    "Sure 😊 Could you let me know "
+                    + " and ".join(
+                        missing_fields
+                    )
+                    + "?"
+                )
+
+        else:
+
+            # --------------------------------------------------
+            # FORMAT CURRENT LISTINGS ONLY
+            # --------------------------------------------------
+
+            listings_context = (
+                format_listings_for_ai(
+                    matching_listings
+                )
+            )
+
+            # --------------------------------------------------
+            # GENERATE REPLY USING CURRENT LISTINGS ONLY
+            # --------------------------------------------------
+
+            response = (
+                openai_client.responses.create(
+
+                    model="gpt-5.6-luna",
+
+                    instructions=(
+                        SYSTEM_INSTRUCTIONS
+                        + f"""
+
+CURRENT CUSTOMER PROFILE:
 
 {json.dumps(
     customer_profile,
@@ -945,204 +948,172 @@ CUSTOMER PROFILE — CURRENT AUTHORITATIVE VERSION:
 )}
 
 
-LATEST CUSTOMER MESSAGE:
-
-{customer_message}
-
-
-MATCHING LISTINGS FROM DATABASE:
+CURRENT DATABASE MATCHES:
 
 {listings_context}
 
 
 IMPORTANT:
 
-The CUSTOMER PROFILE above is the current
-authoritative profile.
+The listings above are the ONLY listings
+you may recommend.
 
-The latest customer information overrides
-all older information.
+Do NOT use an older property from the
+conversation if it is not included above.
 
-If the latest message changed the budget,
-use the new budget.
+The customer's CURRENT budget is:
 
-Do NOT answer using an old budget.
+{budget}
 
-Do NOT recommend a listing that exceeds
-the customer's CURRENT budget.
+Never recommend a property above that budget.
 
-If there are matching listings:
+If the customer has just changed their
+requirements, use the current database
+matches only.
 
-- Use only the database information.
-- You may mention one or two suitable listings.
-- Do not invent missing details.
-- Do not change the asking price.
-- Do not claim availability beyond
-  property_status.
-
-If there are NO matching listings:
-
-- Do not invent a property.
-- Tell the customer that no suitable
-  listing was found in the current database.
-- A property consultant can assist
-  with other options.
-
-If the customer is simply asking about
-a previously mentioned listing, use the
-available conversation context and listing
-information.
-
-Keep the WhatsApp reply short,
-friendly and natural.
+Keep the reply short and natural.
 """
-                ),
+                    ),
 
-                input=conversation_history,
+                    input=[
+                        {
+                            "role": "user",
+                            "content": customer_message
+                        }
+                    ],
 
-                text={
-                    "format": {
+                    text={
+                        "format": {
 
-                        "type": "json_schema",
+                            "type": "json_schema",
 
-                        "name": "customer_reply",
+                            "name": "customer_reply",
 
-                        "schema": {
+                            "schema": {
 
-                            "type": "object",
+                                "type": "object",
 
-                            "properties": {
+                                "properties": {
 
-                                "reply": {
-                                    "type": "string"
-                                },
-
-                                "profile": {
-
-                                    "type": "object",
-
-                                    "properties": {
-
-                                        "name": {
-                                            "type": [
-                                                "string",
-                                                "null"
-                                            ]
-                                        },
-
-                                        "intent": {
-                                            "type": [
-                                                "string",
-                                                "null"
-                                            ]
-                                        },
-
-                                        "location": {
-                                            "type": [
-                                                "string",
-                                                "null"
-                                            ]
-                                        },
-
-                                        "budget": {
-                                            "type": [
-                                                "string",
-                                                "null"
-                                            ]
-                                        },
-
-                                        "property_type": {
-                                            "type": [
-                                                "string",
-                                                "null"
-                                            ]
-                                        },
-
-                                        "interested_property": {
-                                            "type": [
-                                                "string",
-                                                "null"
-                                            ]
-                                        },
-
-                                        "lead_status": {
-                                            "type": [
-                                                "string",
-                                                "null"
-                                            ]
-                                        }
+                                    "reply": {
+                                        "type": "string"
                                     },
 
-                                    "required": [
-                                        "name",
-                                        "intent",
-                                        "location",
-                                        "budget",
-                                        "property_type",
-                                        "interested_property",
-                                        "lead_status"
-                                    ],
+                                    "profile": {
 
-                                    "additionalProperties": False
-                                }
+                                        "type": "object",
+
+                                        "properties": {
+
+                                            "name": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            },
+
+                                            "intent": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            },
+
+                                            "location": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            },
+
+                                            "budget": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            },
+
+                                            "property_type": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            },
+
+                                            "interested_property": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            },
+
+                                            "lead_status": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            }
+                                        },
+
+                                        "required": [
+                                            "name",
+                                            "intent",
+                                            "location",
+                                            "budget",
+                                            "property_type",
+                                            "interested_property",
+                                            "lead_status"
+                                        ],
+
+                                        "additionalProperties": False
+                                    }
+                                },
+
+                                "required": [
+                                    "reply",
+                                    "profile"
+                                ],
+
+                                "additionalProperties": False
                             },
 
-                            "required": [
-                                "reply",
-                                "profile"
-                            ],
-
-                            "additionalProperties": False
-                        },
-
-                        "strict": True
+                            "strict": True
+                        }
                     }
-                }
+                )
             )
-        )
 
-        result = json.loads(
-            response.output_text
-        )
+            result = json.loads(
+                response.output_text
+            )
 
-        ai_reply = result["reply"]
+            ai_reply = result["reply"]
 
-        final_profile = result[
-            "profile"
-        ]
+            final_profile = result[
+                "profile"
+            ]
 
-        # --------------------------------------------------
-        # NEVER ALLOW AI TO OVERWRITE A NEWER BUDGET
-        # WITH AN OLD VALUE
-        # --------------------------------------------------
+            # Never allow an older budget to overwrite
+            # the latest budget.
 
-        if latest_budget:
+            if latest_budget:
 
-            final_profile[
-                "budget"
-            ] = latest_budget
+                final_profile["budget"] = (
+                    latest_budget
+                )
+
+            update_customer(
+                customer_id,
+                final_profile
+            )
 
         print(
             "AI Reply:",
             ai_reply
         )
 
-        print(
-            "Final Customer Profile:",
-            final_profile
-        )
-
         # --------------------------------------------------
-        # UPDATE CUSTOMER PROFILE
-        # --------------------------------------------------
-
-        update_customer(
-            customer_id,
-            final_profile
-        )
-
-        # --------------------------------------------------
-        # SAVE AI REPLY
+        # SAVE AI MESSAGE
         # --------------------------------------------------
 
         save_message(
@@ -1152,7 +1123,7 @@ friendly and natural.
         )
 
         # --------------------------------------------------
-        # SEND WHATSAPP REPLY
+        # SEND WHATSAPP MESSAGE
         # --------------------------------------------------
 
         url = (
