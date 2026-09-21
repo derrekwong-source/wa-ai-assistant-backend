@@ -46,18 +46,46 @@ Try to understand these customer details naturally:
 
 LISTING RULES:
 
-1. If matching listings are provided to you, use ONLY those listings.
-2. Do not invent property information.
-3. Do not invent prices, sizes, locations or availability.
-4. If a matching listing exists, you may introduce it naturally.
-5. If no matching listing exists, tell the customer that there is
-   currently no suitable listing found in the available database
-   and that a property consultant can assist.
-6. Do not promise discounts.
-7. Do not negotiate prices.
-8. Do not give legal, tax or loan advice.
-9. Do not claim that a property is available unless its
-   property_status indicates it is available.
+1. Only recommend listings when the customer's property type,
+   location and budget are all known.
+
+2. If any of these three required search fields are missing,
+   DO NOT search for listings.
+
+3. If any of these three required search fields are missing,
+   DO NOT recommend any specific property.
+
+4. If any required search field is missing, naturally ask for
+   the missing information.
+
+5. Ask only one or two questions at a time.
+
+6. If matching listings are provided, use ONLY those listings.
+
+7. Do not make up property information.
+
+8. Do not invent prices, sizes, locations or availability.
+
+9. If a matching listing exists, you may introduce it naturally.
+
+10. If no matching listing exists, tell the customer that there
+    is currently no suitable listing found in the available
+    database and that a property consultant can assist.
+
+11. Do not promise discounts.
+
+12. Do not negotiate prices.
+
+13. Do not give legal, tax or loan advice.
+
+14. Do not claim that a property is available unless its
+    property_status indicates it is available.
+
+15. The database listing status is not guaranteed to be
+    real-time availability. If the customer asks whether
+    a property is still available, explain that the listing
+    is currently marked as available in the database but
+    a property consultant should confirm the latest status.
 
 You are a first-line assistant, not the salesperson.
 Do not try to close the deal yourself.
@@ -123,7 +151,12 @@ def create_customer(phone):
     return data[0]
 
 
-def save_message(customer_id, sender, message, whatsapp_message_id=None):
+def save_message(
+    customer_id,
+    sender,
+    message,
+    whatsapp_message_id=None
+):
     url = f"{SUPABASE_URL}/rest/v1/messages"
 
     payload = {
@@ -167,7 +200,9 @@ def update_customer(customer_id, profile):
         if value is not None and value != "":
             payload[field] = value
 
-    payload["last_message_at"] = datetime.now(timezone.utc).isoformat()
+    payload["last_message_at"] = (
+        datetime.now(timezone.utc).isoformat()
+    )
 
     headers = supabase_headers()
     headers["Prefer"] = "return=minimal"
@@ -237,9 +272,17 @@ def parse_money(value):
     if not value:
         return None
 
-    text = str(value).lower().replace(",", "").replace(" ", "")
+    text = (
+        str(value)
+        .lower()
+        .replace(",", "")
+        .replace(" ", "")
+    )
 
-    match = re.search(r"(\d+(?:\.\d+)?)\s*(million|m|k)?", text)
+    match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(million|m|k)?",
+        text
+    )
 
     if not match:
         return None
@@ -269,7 +312,11 @@ def get_budget_limit(budget):
     if not budget:
         return None
 
-    text = str(budget).lower().replace(",", "")
+    text = (
+        str(budget)
+        .lower()
+        .replace(",", "")
+    )
 
     matches = re.findall(
         r"\d+(?:\.\d+)?\s*(?:million|m|k)?",
@@ -311,7 +358,9 @@ def get_matching_listings(profile):
         params["location"] = f"ilike.*{location}*"
 
     if property_type:
-        params["property_type"] = f"ilike.*{property_type}*"
+        params["property_type"] = (
+            f"ilike.*{property_type}*"
+        )
 
     response = requests.get(
         url,
@@ -324,7 +373,9 @@ def get_matching_listings(profile):
 
     listings = response.json()
 
-    budget_limit = get_budget_limit(profile.get("budget"))
+    budget_limit = get_budget_limit(
+        profile.get("budget")
+    )
 
     filtered_listings = []
 
@@ -334,7 +385,6 @@ def get_matching_listings(profile):
             listing.get("property_status") or ""
         ).lower()
 
-        # Ignore obviously unavailable listings.
         if status in [
             "sold",
             "rented",
@@ -347,10 +397,8 @@ def get_matching_listings(profile):
             listing.get("asking_price")
         )
 
-        # If customer has a known budget and
-        # listing price can be understood,
-        # filter listings above the budget.
         if budget_limit and asking_price:
+
             if asking_price > budget_limit:
                 continue
 
@@ -360,6 +408,7 @@ def get_matching_listings(profile):
 
 
 def format_listings_for_ai(listings):
+
     if not listings:
         return "NO MATCHING LISTINGS FOUND."
 
@@ -375,9 +424,15 @@ def format_listings_for_ai(listings):
             "built_up": listing.get("built_up"),
             "asking_price": listing.get("asking_price"),
             "tenure": listing.get("tenure"),
-            "property_status": listing.get("property_status"),
-            "suitable_for": listing.get("suitable_for"),
-            "description": listing.get("description")
+            "property_status": listing.get(
+                "property_status"
+            ),
+            "suitable_for": listing.get(
+                "suitable_for"
+            ),
+            "description": listing.get(
+                "description"
+            )
         })
 
     return json.dumps(
@@ -393,7 +448,10 @@ def verify():
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
+    if (
+        mode == "subscribe"
+        and token == VERIFY_TOKEN
+    ):
         return challenge, 200
 
     return "Verification failed", 403
@@ -404,13 +462,25 @@ def webhook():
 
     data = request.get_json()
 
-    print("Incoming WhatsApp message:", data)
+    print(
+        "Incoming WhatsApp message:",
+        data
+    )
 
     try:
 
-        value = data["entry"][0]["changes"][0]["value"]
+        value = data[
+            "entry"
+        ][0][
+            "changes"
+        ][0][
+            "value"
+        ]
 
-        messages = value.get("messages", [])
+        messages = value.get(
+            "messages",
+            []
+        )
 
         if not messages:
             return "EVENT_RECEIVED", 200
@@ -421,23 +491,48 @@ def webhook():
             return "EVENT_RECEIVED", 200
 
         customer_phone = message["from"]
-        customer_message = message["text"]["body"]
-        whatsapp_message_id = message.get("id")
+        customer_message = message[
+            "text"
+        ]["body"]
 
-        print("Customer:", customer_phone)
-        print("Message:", customer_message)
+        whatsapp_message_id = message.get(
+            "id"
+        )
 
-        # Find or create customer
-        customer = get_customer(customer_phone)
+        print(
+            "Customer:",
+            customer_phone
+        )
+
+        print(
+            "Message:",
+            customer_message
+        )
+
+        # --------------------------------------------------
+        # FIND OR CREATE CUSTOMER
+        # --------------------------------------------------
+
+        customer = get_customer(
+            customer_phone
+        )
 
         if not customer:
-            customer = create_customer(customer_phone)
+            customer = create_customer(
+                customer_phone
+            )
 
         customer_id = customer["id"]
 
-        print("Customer ID:", customer_id)
+        print(
+            "Customer ID:",
+            customer_id
+        )
 
-        # Save customer message
+        # --------------------------------------------------
+        # SAVE CUSTOMER MESSAGE
+        # --------------------------------------------------
+
         save_message(
             customer_id,
             "customer",
@@ -445,24 +540,32 @@ def webhook():
             whatsapp_message_id
         )
 
-        # Load conversation history
-        conversation_history = get_conversation_history(
-            customer_id
+        # --------------------------------------------------
+        # LOAD CONVERSATION HISTORY
+        # --------------------------------------------------
+
+        conversation_history = (
+            get_conversation_history(
+                customer_id
+            )
         )
 
         # --------------------------------------------------
         # FIRST AI PASS
-        # Extract customer profile information
+        # EXTRACT CUSTOMER PROFILE
         # --------------------------------------------------
 
-        profile_response = openai_client.responses.create(
-            model="gpt-5.6-luna",
+        profile_response = (
+            openai_client.responses.create(
 
-            instructions="""
-You are extracting customer property-search information
-from a WhatsApp conversation.
+                model="gpt-5.6-luna",
 
-Extract only information clearly provided by the customer.
+                instructions="""
+You are extracting customer property-search
+information from a WhatsApp conversation.
+
+Extract only information clearly provided
+by the customer.
 
 Do not guess.
 
@@ -477,65 +580,92 @@ For intent:
 
 For lead_status:
 - New Lead
-unless the conversation clearly indicates a more advanced lead.
+
+unless the conversation clearly indicates
+a more advanced lead.
 """,
 
-            input=conversation_history,
+                input=conversation_history,
 
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "customer_profile",
-                    "schema": {
-                        "type": "object",
+                text={
+                    "format": {
+                        "type": "json_schema",
 
-                        "properties": {
+                        "name": "customer_profile",
 
-                            "name": {
-                                "type": ["string", "null"]
+                        "schema": {
+
+                            "type": "object",
+
+                            "properties": {
+
+                                "name": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+
+                                "intent": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+
+                                "location": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+
+                                "budget": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+
+                                "property_type": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+
+                                "interested_property": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+
+                                "lead_status": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                }
                             },
 
-                            "intent": {
-                                "type": ["string", "null"]
-                            },
+                            "required": [
+                                "name",
+                                "intent",
+                                "location",
+                                "budget",
+                                "property_type",
+                                "interested_property",
+                                "lead_status"
+                            ],
 
-                            "location": {
-                                "type": ["string", "null"]
-                            },
-
-                            "budget": {
-                                "type": ["string", "null"]
-                            },
-
-                            "property_type": {
-                                "type": ["string", "null"]
-                            },
-
-                            "interested_property": {
-                                "type": ["string", "null"]
-                            },
-
-                            "lead_status": {
-                                "type": ["string", "null"]
-                            }
+                            "additionalProperties": False
                         },
 
-                        "required": [
-                            "name",
-                            "intent",
-                            "location",
-                            "budget",
-                            "property_type",
-                            "interested_property",
-                            "lead_status"
-                        ],
-
-                        "additionalProperties": False
-                    },
-
-                    "strict": True
+                        "strict": True
+                    }
                 }
-            }
+            )
         )
 
         customer_profile = json.loads(
@@ -547,43 +677,117 @@ unless the conversation clearly indicates a more advanced lead.
             customer_profile
         )
 
-        # Update customer profile
+        # --------------------------------------------------
+        # UPDATE CUSTOMER PROFILE
+        # --------------------------------------------------
+
         update_customer(
             customer_id,
             customer_profile
         )
 
         # --------------------------------------------------
-        # SEARCH LISTINGS
+        # CHECK IF LISTING SEARCH IS READY
         # --------------------------------------------------
 
-        matching_listings = get_matching_listings(
-            customer_profile
+        property_type = (
+            customer_profile.get(
+                "property_type"
+            )
         )
+
+        location = (
+            customer_profile.get(
+                "location"
+            )
+        )
+
+        budget = (
+            customer_profile.get(
+                "budget"
+            )
+        )
+
+        search_ready = bool(
+            property_type
+            and location
+            and budget
+        )
+
+        print(
+            "Search ready:",
+            search_ready
+        )
+
+        # --------------------------------------------------
+        # SEARCH LISTINGS ONLY WHEN REQUIREMENTS
+        # ARE COMPLETE
+        # --------------------------------------------------
+
+        if search_ready:
+
+            matching_listings = (
+                get_matching_listings(
+                    customer_profile
+                )
+            )
+
+            listings_context = (
+                format_listings_for_ai(
+                    matching_listings
+                )
+            )
+
+        else:
+
+            matching_listings = []
+
+            listings_context = """
+LISTING SEARCH NOT PERFORMED.
+
+The customer's property search requirements
+are incomplete.
+
+Do NOT recommend any listing.
+
+Do NOT mention any specific property.
+
+The required information for listing search is:
+
+- Property type
+- Location
+- Budget
+
+Ask naturally for the missing information.
+
+Ask only one or two questions at a time.
+"""
 
         print(
             "Matching Listings:",
             matching_listings
         )
 
-        listings_context = format_listings_for_ai(
-            matching_listings
-        )
-
         # --------------------------------------------------
         # SECOND AI PASS
-        # Generate customer reply
+        # GENERATE CUSTOMER REPLY
         # --------------------------------------------------
 
-        response = openai_client.responses.create(
+        response = (
+            openai_client.responses.create(
 
-            model="gpt-5.6-luna",
+                model="gpt-5.6-luna",
 
-            instructions=SYSTEM_INSTRUCTIONS + f"""
+                instructions=(
+                    SYSTEM_INSTRUCTIONS
+                    + f"""
 
 CUSTOMER PROFILE:
 
-{json.dumps(customer_profile, ensure_ascii=False)}
+{json.dumps(
+    customer_profile,
+    ensure_ascii=False
+)}
 
 
 MATCHING LISTINGS FROM DATABASE:
@@ -593,100 +797,164 @@ MATCHING LISTINGS FROM DATABASE:
 
 IMPORTANT:
 
-The listings above come directly from the property database.
+FIRST PRIORITY — INCOMPLETE REQUIREMENTS
 
-If listings are provided:
+If the customer's property type,
+location or budget is missing:
+
+DO NOT recommend any listing.
+
+DO NOT mention any specific property.
+
+DO NOT say that no suitable listing
+was found.
+
+Instead, naturally ask for the missing
+information.
+
+Ask only one or two questions at a time.
+
+Examples:
+
+"Sure 😊 Which area are you looking for,
+and what's your budget?"
+
+"Sure 😊 Which area are you looking for?
+And is this for your own business
+or investment?"
+
+
+SECOND PRIORITY — COMPLETE REQUIREMENTS
+
+Only when property type, location and
+budget are all known should you use
+the listing database results.
+
+If matching listings are provided:
+
 - Use only the information provided.
 - You may mention one or two suitable listings.
 - Do not invent missing details.
 - Do not change the listed asking price.
-- Do not claim availability beyond the property_status.
-- If appropriate, ask whether the customer would like more details.
+- Do not claim availability beyond
+  the property_status.
+- If appropriate, ask whether the customer
+  would like more details.
 
 If NO MATCHING LISTINGS FOUND:
+
 - Do not invent a property.
-- Tell the customer that no suitable listing was found
-  in the current database.
-- A property consultant can assist with other options.
+- Tell the customer that no suitable
+  listing was found in the current database.
+- A property consultant can assist
+  with other options.
 
-Keep the WhatsApp reply short and natural.
-""",
+Keep the WhatsApp reply short,
+friendly and natural.
+"""
+                ),
 
-            input=conversation_history,
+                input=conversation_history,
 
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "customer_reply",
-                    "schema": {
+                text={
+                    "format": {
 
-                        "type": "object",
+                        "type": "json_schema",
 
-                        "properties": {
+                        "name": "customer_reply",
 
-                            "reply": {
-                                "type": "string"
-                            },
+                        "schema": {
 
-                            "profile": {
-                                "type": "object",
+                            "type": "object",
 
-                                "properties": {
+                            "properties": {
 
-                                    "name": {
-                                        "type": ["string", "null"]
-                                    },
-
-                                    "intent": {
-                                        "type": ["string", "null"]
-                                    },
-
-                                    "location": {
-                                        "type": ["string", "null"]
-                                    },
-
-                                    "budget": {
-                                        "type": ["string", "null"]
-                                    },
-
-                                    "property_type": {
-                                        "type": ["string", "null"]
-                                    },
-
-                                    "interested_property": {
-                                        "type": ["string", "null"]
-                                    },
-
-                                    "lead_status": {
-                                        "type": ["string", "null"]
-                                    }
+                                "reply": {
+                                    "type": "string"
                                 },
 
-                                "required": [
-                                    "name",
-                                    "intent",
-                                    "location",
-                                    "budget",
-                                    "property_type",
-                                    "interested_property",
-                                    "lead_status"
-                                ],
+                                "profile": {
 
-                                "additionalProperties": False
-                            }
+                                    "type": "object",
+
+                                    "properties": {
+
+                                        "name": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        },
+
+                                        "intent": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        },
+
+                                        "location": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        },
+
+                                        "budget": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        },
+
+                                        "property_type": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        },
+
+                                        "interested_property": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        },
+
+                                        "lead_status": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        }
+                                    },
+
+                                    "required": [
+                                        "name",
+                                        "intent",
+                                        "location",
+                                        "budget",
+                                        "property_type",
+                                        "interested_property",
+                                        "lead_status"
+                                    ],
+
+                                    "additionalProperties": False
+                                }
+                            },
+
+                            "required": [
+                                "reply",
+                                "profile"
+                            ],
+
+                            "additionalProperties": False
                         },
 
-                        "required": [
-                            "reply",
-                            "profile"
-                        ],
-
-                        "additionalProperties": False
-                    },
-
-                    "strict": True
+                        "strict": True
+                    }
                 }
-            }
+            )
         )
 
         result = json.loads(
@@ -695,8 +963,9 @@ Keep the WhatsApp reply short and natural.
 
         ai_reply = result["reply"]
 
-        # Use latest extracted profile
-        customer_profile = result["profile"]
+        customer_profile = result[
+            "profile"
+        ]
 
         print(
             "AI Reply:",
@@ -708,34 +977,49 @@ Keep the WhatsApp reply short and natural.
             customer_profile
         )
 
-        # Update customer profile
+        # --------------------------------------------------
+        # UPDATE CUSTOMER PROFILE AGAIN
+        # --------------------------------------------------
+
         update_customer(
             customer_id,
             customer_profile
         )
 
-        # Save AI reply
+        # --------------------------------------------------
+        # SAVE AI REPLY
+        # --------------------------------------------------
+
         save_message(
             customer_id,
             "ai",
             ai_reply
         )
 
-        # Send reply through WhatsApp
+        # --------------------------------------------------
+        # SEND REPLY THROUGH WHATSAPP
+        # --------------------------------------------------
+
         url = (
             f"https://graph.facebook.com/v26.0/"
             f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
         )
 
         headers = {
-            "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+            "Authorization": (
+                f"Bearer {WHATSAPP_ACCESS_TOKEN}"
+            ),
             "Content-Type": "application/json"
         }
 
         payload = {
+
             "messaging_product": "whatsapp",
+
             "to": customer_phone,
+
             "type": "text",
+
             "text": {
                 "body": ai_reply
             }
