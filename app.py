@@ -34,6 +34,17 @@ SUPABASE_HEADERS = {
     "Content-Type": "application/json",
 }
 
+LEAD_STATUSES = [
+    "New Lead",
+    "Warm Lead",
+    "Hot Lead",
+    "Contacted",
+    "Viewing",
+    "Negotiation",
+    "Closed",
+    "Lost",
+]
+
 
 # =========================================================
 # CUSTOMER PROFILE
@@ -101,7 +112,9 @@ def dashboard_auth_required():
         "Dashboard login required.",
         401,
         {
-            "WWW-Authenticate": 'Basic realm="WA AI Assistant Dashboard"'
+            "WWW-Authenticate": (
+                'Basic realm="WA AI Assistant Dashboard"'
+            )
         },
     )
 
@@ -128,7 +141,10 @@ def get_customer(phone):
     )
 
     if response.status_code != 200:
-        print("Supabase get customer error:", response.text)
+        print(
+            "Supabase get customer error:",
+            response.text,
+        )
         return None
 
     data = response.json()
@@ -157,7 +173,10 @@ def create_customer(phone):
     )
 
     if response.status_code not in [200, 201]:
-        print("Supabase create customer error:", response.text)
+        print(
+            "Supabase create customer error:",
+            response.text,
+        )
         return None
 
     data = response.json()
@@ -185,7 +204,10 @@ def update_customer(customer_id, updates):
     )
 
     if response.status_code not in [200, 204]:
-        print("Supabase update customer error:", response.text)
+        print(
+            "Supabase update customer error:",
+            response.text,
+        )
         return None
 
     if response.status_code == 204:
@@ -197,16 +219,15 @@ def update_customer(customer_id, updates):
 
 
 # =========================================================
-# GET HOT LEADS FOR DASHBOARD
+# GET HOT LEADS / DASHBOARD CUSTOMERS
 # =========================================================
 
-def get_hot_leads():
+def get_dashboard_leads():
 
     url = f"{SUPABASE_URL}/rest/v1/customers"
 
     params = {
         "select": "*",
-        "or": "(lead_status.eq.Hot Lead,handoff_required.eq.true)",
         "order": "last_message_at.desc.nullslast,created_at.desc",
         "limit": "100",
     }
@@ -220,13 +241,98 @@ def get_hot_leads():
 
     if response.status_code != 200:
         print(
-            "Supabase hot leads error:",
+            "Supabase dashboard leads error:",
             response.status_code,
             response.text,
         )
         return []
 
     return response.json()
+
+
+# =========================================================
+# UPDATE LEAD STATUS FROM DASHBOARD
+# =========================================================
+
+@app.route("/dashboard/update-status", methods=["POST"])
+def dashboard_update_status():
+
+    if not dashboard_authenticated():
+        return dashboard_auth_required()
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    customer_id = data.get(
+        "customer_id"
+    )
+
+    new_status = data.get(
+        "lead_status"
+    )
+
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "message": "Missing customer_id",
+        }), 400
+
+    if new_status not in LEAD_STATUSES:
+        return jsonify({
+            "success": False,
+            "message": "Invalid lead status",
+        }), 400
+
+    try:
+
+        customer_id = int(customer_id)
+
+    except (TypeError, ValueError):
+
+        return jsonify({
+            "success": False,
+            "message": "Invalid customer_id",
+        }), 400
+
+    updates = {
+        "lead_status": new_status,
+    }
+
+    # Once agent manually changes status,
+    # human handoff is no longer pending.
+    if new_status in [
+        "Contacted",
+        "Viewing",
+        "Negotiation",
+        "Closed",
+        "Lost",
+    ]:
+        updates["handoff_required"] = False
+
+    # If manually moved back to Hot Lead,
+    # mark it as requiring human attention.
+    elif new_status == "Hot Lead":
+        updates["handoff_required"] = True
+
+    result = update_customer(
+        customer_id,
+        updates,
+    )
+
+    if result is None:
+        return jsonify({
+            "success": False,
+            "message": "Unable to update customer",
+        }), 500
+
+    return jsonify({
+        "success": True,
+        "lead_status": new_status,
+        "handoff_required": updates.get(
+            "handoff_required"
+        ),
+    }), 200
 
 
 # =========================================================
@@ -239,14 +345,56 @@ def dashboard():
     if not dashboard_authenticated():
         return dashboard_auth_required()
 
-    leads = get_hot_leads()
+    leads = get_dashboard_leads()
+
+    hot_count = 0
+    warm_count = 0
+    contact_count = 0
+    viewing_count = 0
+    negotiation_count = 0
+    closed_count = 0
+    lost_count = 0
+
+    for lead in leads:
+
+        status = lead.get(
+            "lead_status"
+        )
+
+        if status == "Hot Lead":
+            hot_count += 1
+
+        elif status == "Warm Lead":
+            warm_count += 1
+
+        elif status == "Contacted":
+            contact_count += 1
+
+        elif status == "Viewing":
+            viewing_count += 1
+
+        elif status == "Negotiation":
+            negotiation_count += 1
+
+        elif status == "Closed":
+            closed_count += 1
+
+        elif status == "Lost":
+            lost_count += 1
 
     rows = ""
 
     for lead in leads:
 
+        customer_id = lead.get(
+            "id"
+        )
+
         name = escape(
-            str(lead.get("name") or "Unknown")
+            str(
+                lead.get("name")
+                or "Unknown"
+            )
         )
 
         phone = escape(
@@ -291,17 +439,9 @@ def dashboard():
             )
         )
 
-        lead_status = escape(
-            str(
-                lead.get("lead_status")
-                or "-"
-            )
-        )
-
-        handoff = (
-            "YES"
-            if lead.get("handoff_required")
-            else "NO"
+        lead_status = (
+            lead.get("lead_status")
+            or "New Lead"
         )
 
         last_message_at = escape(
@@ -312,38 +452,90 @@ def dashboard():
             )
         )
 
+        options = ""
+
+        for status in LEAD_STATUSES:
+
+            selected = (
+                "selected"
+                if status == lead_status
+                else ""
+            )
+
+            options += (
+                f'<option value="{escape(status)}" '
+                f'{selected}>{escape(status)}</option>'
+            )
+
+        status_class = "status-default"
+
+        if lead_status == "Hot Lead":
+            status_class = "status-hot"
+
+        elif lead_status == "Warm Lead":
+            status_class = "status-warm"
+
+        elif lead_status == "Contacted":
+            status_class = "status-contacted"
+
+        elif lead_status == "Viewing":
+            status_class = "status-viewing"
+
+        elif lead_status == "Negotiation":
+            status_class = "status-negotiation"
+
+        elif lead_status == "Closed":
+            status_class = "status-closed"
+
+        elif lead_status == "Lost":
+            status_class = "status-lost"
+
         rows += f"""
         <tr>
+
             <td>
                 <strong>{name}</strong><br>
                 <span class="phone">{phone}</span>
             </td>
 
-            <td>{escape(intent)}</td>
+            <td>{intent}</td>
 
             <td>
-                <strong>{escape(budget)}</strong>
+                <strong>{budget}</strong>
             </td>
 
-            <td>{escape(location)}</td>
+            <td>{location}</td>
 
-            <td>{escape(property_type)}</td>
+            <td>{property_type}</td>
 
             <td class="property">
                 {interested_property}
             </td>
 
             <td>
-                <span class="hot">{lead_status}</span>
+
+                <select
+                    class="status-select {status_class}"
+                    data-customer-id="{customer_id}"
+                    onchange="updateStatus(this)"
+                >
+
+                    {options}
+
+                </select>
+
             </td>
 
             <td>
-                <span class="handoff">{handoff}</span>
+                <span class="handoff">
+                    {"YES" if lead.get("handoff_required") else "NO"}
+                </span>
             </td>
 
             <td class="date">
                 {last_message_at}
             </td>
+
         </tr>
         """
 
@@ -352,7 +544,7 @@ def dashboard():
         rows = """
         <tr>
             <td colspan="9" class="empty">
-                No Hot Leads yet.
+                No customers yet.
             </td>
         </tr>
         """
@@ -361,6 +553,7 @@ def dashboard():
 <!DOCTYPE html>
 
 <html>
+
 <head>
 
 <meta charset="UTF-8">
@@ -368,11 +561,6 @@ def dashboard():
 <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
->
-
-<meta
-    http-equiv="refresh"
-    content="30"
 >
 
 <title>WA AI Assistant - Dashboard</title>
@@ -431,30 +619,55 @@ body {{
 }}
 
 .stats {{
-    display: flex;
-    gap: 18px;
+    display: grid;
+    grid-template-columns:
+        repeat(7, minmax(120px, 1fr));
+    gap: 12px;
     margin-bottom: 22px;
 }}
 
 .stat-card {{
     background: white;
     border-radius: 12px;
-    padding: 18px 22px;
+    padding: 16px;
     box-shadow:
         0 2px 10px rgba(0,0,0,0.06);
-    min-width: 180px;
 }}
 
 .stat-title {{
-    font-size: 12px;
+    font-size: 11px;
     color: #718096;
-    margin-bottom: 8px;
+    margin-bottom: 7px;
+    font-weight: 700;
 }}
 
 .stat-number {{
-    font-size: 30px;
+    font-size: 25px;
     font-weight: 700;
-    color: #c28b20;
+}}
+
+.stat-hot {{
+    color: #d12f2f;
+}}
+
+.stat-warm {{
+    color: #c77b00;
+}}
+
+.stat-viewing {{
+    color: #2463a8;
+}}
+
+.stat-negotiation {{
+    color: #7542a8;
+}}
+
+.stat-closed {{
+    color: #23844d;
+}}
+
+.stat-lost {{
+    color: #6b7280;
 }}
 
 .table-wrapper {{
@@ -468,7 +681,7 @@ body {{
 table {{
     width: 100%;
     border-collapse: collapse;
-    min-width: 1300px;
+    min-width: 1450px;
 }}
 
 th {{
@@ -501,14 +714,52 @@ tr:hover {{
     line-height: 1.5;
 }}
 
-.hot {{
-    display: inline-block;
-    background: #fff1f1;
-    color: #d12f2f;
-    padding: 5px 9px;
-    border-radius: 6px;
+.status-select {{
+    min-width: 135px;
+    padding: 7px 9px;
+    border-radius: 7px;
+    border: 1px solid #d5dae1;
+    font-size: 12px;
     font-weight: 700;
-    font-size: 11px;
+    cursor: pointer;
+    background: white;
+}}
+
+.status-hot {{
+    color: #d12f2f;
+    border-color: #f0b5b5;
+}}
+
+.status-warm {{
+    color: #a56b00;
+    border-color: #e8c875;
+}}
+
+.status-contacted {{
+    color: #2868a5;
+}}
+
+.status-viewing {{
+    color: #2463a8;
+    border-color: #a9c9e8;
+}}
+
+.status-negotiation {{
+    color: #7542a8;
+    border-color: #cbb5df;
+}}
+
+.status-closed {{
+    color: #23844d;
+    border-color: #a9d6ba;
+}}
+
+.status-lost {{
+    color: #6b7280;
+}}
+
+.status-default {{
+    color: #475569;
 }}
 
 .handoff {{
@@ -533,6 +784,15 @@ tr:hover {{
     color: #718096;
 }}
 
+@media (max-width: 1000px) {{
+
+    .stats {{
+        grid-template-columns:
+            repeat(3, 1fr);
+    }}
+
+}}
+
 @media (max-width: 700px) {{
 
     .header-inner {{
@@ -544,11 +804,8 @@ tr:hover {{
     }}
 
     .stats {{
-        display: block;
-    }}
-
-    .stat-card {{
-        margin-bottom: 12px;
+        grid-template-columns:
+            repeat(2, 1fr);
     }}
 
 }}
@@ -564,13 +821,15 @@ tr:hover {{
     <div class="header-inner">
 
         <div>
+
             <div class="logo">
                 WA AI Assistant
             </div>
 
             <div class="subtitle">
-                Human Handoff Dashboard
+                Lead Management Dashboard
             </div>
+
         </div>
 
         <div class="refresh">
@@ -587,15 +846,66 @@ tr:hover {{
     <div class="stats">
 
         <div class="stat-card">
-
             <div class="stat-title">
-                HOT LEADS
+                HOT
             </div>
+            <div class="stat-number stat-hot">
+                {hot_count}
+            </div>
+        </div>
 
+        <div class="stat-card">
+            <div class="stat-title">
+                WARM
+            </div>
+            <div class="stat-number stat-warm">
+                {warm_count}
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-title">
+                CONTACTED
+            </div>
             <div class="stat-number">
-                {len(leads)}
+                {contact_count}
             </div>
+        </div>
 
+        <div class="stat-card">
+            <div class="stat-title">
+                VIEWING
+            </div>
+            <div class="stat-number stat-viewing">
+                {viewing_count}
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-title">
+                NEGOTIATION
+            </div>
+            <div class="stat-number stat-negotiation">
+                {negotiation_count}
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-title">
+                CLOSED
+            </div>
+            <div class="stat-number stat-closed">
+                {closed_count}
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-title">
+                LOST
+            </div>
+            <div class="stat-number stat-lost">
+                {lost_count}
+            </div>
         </div>
 
     </div>
@@ -615,7 +925,7 @@ tr:hover {{
                     <th>Location</th>
                     <th>Property Type</th>
                     <th>Interested Property</th>
-                    <th>Status</th>
+                    <th>Lead Status</th>
                     <th>Handoff</th>
                     <th>Last Message</th>
 
@@ -635,7 +945,72 @@ tr:hover {{
 
 </div>
 
+
+<script>
+
+async function updateStatus(selectElement) {{
+
+    const customerId =
+        selectElement.dataset.customerId;
+
+    const newStatus =
+        selectElement.value;
+
+    selectElement.disabled = true;
+
+    try {{
+
+        const response = await fetch(
+            "/dashboard/update-status",
+            {{
+                method: "POST",
+                headers: {{
+                    "Content-Type":
+                        "application/json"
+                }},
+                body: JSON.stringify({{
+                    customer_id:
+                        customerId,
+                    lead_status:
+                        newStatus
+                }})
+            }}
+        );
+
+        const result =
+            await response.json();
+
+        if (!result.success) {{
+
+            alert(
+                "Unable to update status: "
+                + result.message
+            );
+
+            window.location.reload();
+
+            return;
+        }}
+
+        window.location.reload();
+
+    }} catch (error) {{
+
+        alert(
+            "Connection error. "
+            + "Please try again."
+        );
+
+        window.location.reload();
+
+    }}
+
+}}
+
+</script>
+
 </body>
+
 </html>
 """
 
@@ -1078,7 +1453,9 @@ def detect_handoff(
 
     if (
         profile.get("intent")
-        and str(profile.get("intent")).lower()
+        and str(
+            profile.get("intent")
+        ).lower()
         in buying_intents
     ):
 
@@ -1217,7 +1594,7 @@ Write the WhatsApp reply now.
 
 
 # =========================================================
-# SEND WHATSAPP MESSAGE
+# SEND WHATSAPP
 # =========================================================
 
 def send_whatsapp_message(
@@ -1442,10 +1819,6 @@ def webhook():
                         text_body,
                     )
 
-                    # ---------------------------------------------
-                    # GET / CREATE CUSTOMER
-                    # ---------------------------------------------
-
                     customer = get_customer(
                         sender
                     )
@@ -1473,10 +1846,6 @@ def webhook():
                         customer_id,
                     )
 
-                    # ---------------------------------------------
-                    # SAVE CUSTOMER MESSAGE
-                    # ---------------------------------------------
-
                     save_message(
                         customer_id=customer_id,
                         sender="customer",
@@ -1485,10 +1854,6 @@ def webhook():
                             whatsapp_message_id
                         ),
                     )
-
-                    # ---------------------------------------------
-                    # PROFILE EXTRACTION
-                    # ---------------------------------------------
 
                     profile = (
                         extract_customer_profile(
@@ -1502,19 +1867,11 @@ def webhook():
                         profile,
                     )
 
-                    # ---------------------------------------------
-                    # OLD HANDOFF STATE
-                    # ---------------------------------------------
-
                     old_handoff_required = bool(
                         customer.get(
                             "handoff_required"
                         ) or False
                     )
-
-                    # ---------------------------------------------
-                    # NEW HANDOFF DETECTION
-                    # ---------------------------------------------
 
                     handoff_triggered = (
                         detect_handoff(
@@ -1527,10 +1884,6 @@ def webhook():
                         old_handoff_required
                         or handoff_triggered
                     )
-
-                    # ---------------------------------------------
-                    # LEAD STATUS
-                    # ---------------------------------------------
 
                     existing_lead_status = (
                         customer.get(
@@ -1556,10 +1909,6 @@ def webhook():
                     ):
 
                         lead_status = "Hot Lead"
-
-                    # ---------------------------------------------
-                    # UPDATE CUSTOMER
-                    # ---------------------------------------------
 
                     customer_updates = {
                         "name": profile.get(
@@ -1603,10 +1952,6 @@ def webhook():
                         lead_status,
                     )
 
-                    # ---------------------------------------------
-                    # LISTING SEARCH
-                    # ---------------------------------------------
-
                     matching_listings = (
                         search_listings(
                             location=profile.get(
@@ -1625,10 +1970,6 @@ def webhook():
                         "Matching Listings:",
                         matching_listings,
                     )
-
-                    # ---------------------------------------------
-                    # AI REPLY
-                    # ---------------------------------------------
 
                     combined_profile = {
                         **customer,
@@ -1654,28 +1995,16 @@ def webhook():
                         ai_reply,
                     )
 
-                    # ---------------------------------------------
-                    # SAVE AI MESSAGE
-                    # ---------------------------------------------
-
                     save_message(
                         customer_id=customer_id,
                         sender="assistant",
                         message=ai_reply,
                     )
 
-                    # ---------------------------------------------
-                    # SEND AI REPLY
-                    # ---------------------------------------------
-
                     send_whatsapp_message(
                         to_phone=sender,
                         message=ai_reply,
                     )
-
-                    # ---------------------------------------------
-                    # HOT LEAD NOTIFICATION
-                    # ---------------------------------------------
 
                     if (
                         handoff_triggered
